@@ -1,42 +1,26 @@
-# Prerequisites
-*.d
+# Python
+.venv/
+__pycache__/
+*.pyc
 
-# Compiled Object files
-*.slo
-*.lo
-*.o
-*.obj
+# VS Code (permitimos algunos archivos de config)
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/launch.json
+!.vscode/README.md
 
-# Precompiled Headers
-*.gch
-*.pch
+# Arduino / PlatformIO
+.pio/
+.arduino*
+build/
+*.elf
+*.hex
 
-# Linker files
-*.ilk
+# Docker / Infra
+infra/mosquitto/data/
+*.log
 
-# Debugger Files
-*.pdb
-
-# Compiled Dynamic libraries
-*.so
-*.dylib
-*.dll
-
-# Fortran module files
-*.mod
-*.smod
-
-# Compiled Static libraries
-*.lai
-*.la
-*.a
-*.lib
-
-# Executables
-*.exe
-*.out
-*.app
-
-# debug information files
-*.dwo
+# SO / miscelánea
 .DS_Store
+Thumbs.db

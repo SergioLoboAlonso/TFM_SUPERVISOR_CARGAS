@@ -1,0 +1,11 @@
+{
+  "recommendations": [
+    "ms-python.python",
+    "ms-python.black-formatter",
+    "eamodio.gitlens",
+    "github.vscode-pull-request-github",
+    "yzhang.markdown-all-in-one",
+    "ms-azuretools.vscode-docker",
+    "arduino.arduino"
+  ]
+}

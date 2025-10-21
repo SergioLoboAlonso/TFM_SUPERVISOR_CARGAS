@@ -1,0 +1,16 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Python: edge main",
+      "type": "python",
+      "request": "launch",
+      "program": "${workspaceFolder}/edge/src/main.py",
+      "console": "integratedTerminal",
+      "env": {
+        "MQTT_HOST": "localhost",
+        "MQTT_PORT": "1883"
+      }
+    }
+  ]
+}

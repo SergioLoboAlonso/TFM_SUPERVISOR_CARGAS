@@ -109,18 +109,18 @@ bool regs_read_input(uint16_t addr, uint16_t count, uint16_t* out){
   for (uint16_t i=0;i<count;i++){
     uint16_t a = addr + i;
     switch(a){
-      case IR_ANGLE_X_mDEG:    out[i] = (uint16_t)R.ang_x_mdeg; break;
-      case IR_ANGLE_Y_mDEG:    out[i] = (uint16_t)R.ang_y_mdeg; break;
-      case IR_TEMP_mC:         out[i] = (uint16_t)R.temp_mc;    break;
-      case IR_ACC_X_mG:        out[i] = (uint16_t)R.acc_x_mg;   break;
-      case IR_ACC_Y_mG:        out[i] = (uint16_t)R.acc_y_mg;   break;
-      case IR_ACC_Z_mG:        out[i] = (uint16_t)R.acc_z_mg;   break;
-      case IR_GYR_X_mdps:      out[i] = (uint16_t)R.gyr_x_mdps; break;
-      case IR_GYR_Y_mdps:      out[i] = (uint16_t)R.gyr_y_mdps; break;
-      case IR_GYR_Z_mdps:      out[i] = (uint16_t)R.gyr_z_mdps; break;
-      case IR_SAMPLE_COUNT_LO: out[i] = (uint16_t)(R.sample_cnt & 0xFFFF); break;
-      case IR_SAMPLE_COUNT_HI: out[i] = (uint16_t)((R.sample_cnt>>16) & 0xFFFF); break;
-      case IR_FLAGS:           out[i] = 0; break; // placeholder de calidad
+  case IR_MED_ANGULO_X_CDEG:    out[i] = (uint16_t)R.ang_x_mdeg; break;
+  case IR_MED_ANGULO_Y_CDEG:    out[i] = (uint16_t)R.ang_y_mdeg; break;
+  case IR_MED_TEMPERATURA_CENTI:out[i] = (uint16_t)R.temp_mc;    break;
+  case IR_MED_ACEL_X_mG:        out[i] = (uint16_t)R.acc_x_mg;   break;
+  case IR_MED_ACEL_Y_mG:        out[i] = (uint16_t)R.acc_y_mg;   break;
+  case IR_MED_ACEL_Z_mG:        out[i] = (uint16_t)R.acc_z_mg;   break;
+  case IR_MED_GIRO_X_mdps:      out[i] = (uint16_t)R.gyr_x_mdps; break;
+  case IR_MED_GIRO_Y_mdps:      out[i] = (uint16_t)R.gyr_y_mdps; break;
+  case IR_MED_GIRO_Z_mdps:      out[i] = (uint16_t)R.gyr_z_mdps; break;
+  case IR_MED_MUESTRAS_LO:      out[i] = (uint16_t)(R.sample_cnt & 0xFFFF); break;
+  case IR_MED_MUESTRAS_HI:      out[i] = (uint16_t)((R.sample_cnt>>16) & 0xFFFF); break;
+  case IR_MED_FLAGS_CALIDAD:     out[i] = 0; break; // placeholder de calidad
       default:                 out[i] = 0; break; // reservas → 0
     }
   }
@@ -135,31 +135,31 @@ bool regs_read_holding(uint16_t addr, uint16_t count, uint16_t* out){
     uint16_t a = addr + i;
     switch(a){
       // Info
-      case HR_DEV_VENDOR_ID:   out[i] = R.vendor_id;   break;
-      case HR_DEV_PRODUCT_ID:  out[i] = R.product_id;  break;
-      case HR_DEV_HW_VERSION:  out[i] = R.hw_version;  break;
-      case HR_DEV_FW_VERSION:  out[i] = R.fw_version;  break;
-      case HR_DEV_UNIT_ID:     out[i] = R.unit_id;     break;
-      case HR_DEV_CAPS:        out[i] = R.caps;        break;
-      case HR_DEV_UPTIME_LO:   out[i] = uptime_lo();   break;
-      case HR_DEV_UPTIME_HI:   out[i] = uptime_hi();   break;
-      case HR_DEV_STATUS:      out[i] = R.status;      break;
-      case HR_DEV_ERRORS:      out[i] = R.errors;      break;
+  case HR_INFO_VENDOR_ID:      out[i] = R.vendor_id;   break;
+  case HR_INFO_PRODUCTO_ID:    out[i] = R.product_id;  break;
+  case HR_INFO_VERSION_HW:     out[i] = R.hw_version;  break;
+  case HR_INFO_VERSION_FW:     out[i] = R.fw_version;  break;
+  case HR_INFO_ID_UNIDAD:      out[i] = R.unit_id;     break;
+  case HR_INFO_CAPACIDADES:    out[i] = R.caps;        break;
+  case HR_INFO_UPTIME_S_LO:    out[i] = uptime_lo();   break;
+  case HR_INFO_UPTIME_S_HI:    out[i] = uptime_hi();   break;
+  case HR_INFO_ESTADO:         out[i] = R.status;      break;
+  case HR_INFO_ERRORES:        out[i] = R.errors;      break;
 
       // Config
-      case HR_CFG_BAUDRATE_CODE: out[i] = R.baud_code;  break;
-      case HR_CFG_MPU_LPF_HZ:    out[i] = R.mpu_lpf_hz; break;
-      case HR_CFG_SAVE_APPLY:    out[i] = R.save_apply; break; // eco último valor
-      case HR_CMD_IDENT_SECS:    out[i] = R.ident_secs; break; // eco último valor
-      case HR_CFG_UNIT_ID:       out[i] = R.unit_id;    break;
+  case HR_CFG_BAUDIOS:         out[i] = R.baud_code;  break;
+  case HR_CFG_MPU_FILTRO_HZ:   out[i] = R.mpu_lpf_hz; break;
+  case HR_CMD_GUARDAR_APLICAR: out[i] = R.save_apply; break; // eco último valor
+  case HR_CMD_IDENT_SEGUNDOS:  out[i] = R.ident_secs; break; // eco último valor
+  case HR_CFG_ID_UNIDAD:       out[i] = R.unit_id;    break;
 
       // Diagnóstico
-      case HR_DIAG_RX_FRAMES:    out[i] = R.rx_frames;  break;
-      case HR_DIAG_RX_CRC_ERR:   out[i] = R.rx_crc_err; break;
-      case HR_DIAG_RX_EXCPT:     out[i] = R.rx_excpt;   break;
-      case HR_DIAG_TX_FRAMES:    out[i] = R.tx_frames;  break;
-      case HR_DIAG_OVERRUNS:     out[i] = R.overruns;   break;
-      case HR_DIAG_LAST_EXCPT:   out[i] = R.last_excpt; break;
+  case HR_DIAG_TRAMAS_RX_OK:     out[i] = R.rx_frames;  break;
+  case HR_DIAG_RX_CRC_ERROR:     out[i] = R.rx_crc_err; break;
+  case HR_DIAG_RX_EXCEPCIONES:   out[i] = R.rx_excpt;   break;
+  case HR_DIAG_TRAMAS_TX_OK:     out[i] = R.tx_frames;  break;
+  case HR_DIAG_DESBORDES_UART:   out[i] = R.overruns;   break;
+  case HR_DIAG_ULTIMA_EXCEPCION: out[i] = R.last_excpt; break;
 
       default: out[i] = 0; break;
     }
@@ -172,24 +172,24 @@ bool regs_read_holding(uint16_t addr, uint16_t count, uint16_t* out){
 // -----------------------------
 bool regs_write_holding(uint16_t addr, uint16_t value){
   switch(addr){
-    case HR_CFG_BAUDRATE_CODE:
+  case HR_CFG_BAUDIOS:
       if (value<=4){ R.baud_code = value; R.status |= DEV_STATUS_CFG_DIRTY; return true; }
       R.errors |= DEV_ERR_RANGE; return false;
 
-    case HR_CFG_MPU_LPF_HZ:
+  case HR_CFG_MPU_FILTRO_HZ:
       // acepta rango típico codificado (ejemplo 5..98 Hz codificados)
       if (value<=200){ R.mpu_lpf_hz = value; R.status |= DEV_STATUS_CFG_DIRTY; return true; }
       R.errors |= DEV_ERR_RANGE; return false;
 
-    case HR_CFG_UNIT_ID:
+  case HR_CFG_ID_UNIDAD:
       if (value>=1 && value<=247){ R.unit_id = value; R.status |= DEV_STATUS_CFG_DIRTY; return true; }
       R.errors |= DEV_ERR_RANGE; return false;
 
-    case HR_CMD_IDENT_SECS:
+  case HR_CMD_IDENT_SEGUNDOS:
       R.ident_secs = value;  // la capa superior iniciará/parará el patrón
       return true;
 
-    case HR_CFG_SAVE_APPLY:
+  case HR_CMD_GUARDAR_APLICAR:
       // claves: 0xA55A=save, 0xB007=apply
       if (value==0xA55A || value==0xB007){ R.save_apply = value; return true; }
       R.errors |= DEV_ERR_RANGE; return false;
@@ -215,11 +215,11 @@ void regs_bump_sample_counter(void){ R.sample_cnt++; }
 // -----------------------------
 void regs_diag_inc(uint16_t reg_addr){
   switch(reg_addr){
-    case HR_DIAG_RX_FRAMES:  R.rx_frames++;  break;
-    case HR_DIAG_RX_CRC_ERR: R.rx_crc_err++; break;
-    case HR_DIAG_RX_EXCPT:   R.rx_excpt++;   break;
-    case HR_DIAG_TX_FRAMES:  R.tx_frames++;  break;
-    case HR_DIAG_OVERRUNS:   R.overruns++;   break;
+    case HR_DIAG_TRAMAS_RX_OK:   R.rx_frames++;  break;
+    case HR_DIAG_RX_CRC_ERROR:   R.rx_crc_err++; break;
+    case HR_DIAG_RX_EXCEPCIONES: R.rx_excpt++;   break;
+    case HR_DIAG_TRAMAS_TX_OK:   R.tx_frames++;  break;
+    case HR_DIAG_DESBORDES_UART: R.overruns++;   break;
     default: break;
   }
 }

@@ -45,55 +45,55 @@ extern "C" {
 // BLOQUE 1: Información de dispositivo (Holding 4xxxx, sólo lectura desde maestro)
 // Dirección base 0 (equivalente 40001…)
 // -----------------------------
-#define HR_DEV_VENDOR_ID      0x0000  // 40001 R  Vendor (0x5446 = 'TF')
-#define HR_DEV_PRODUCT_ID     0x0001  // 40002 R  Producto (0x4D30 = 'M0')
-#define HR_DEV_HW_VERSION     0x0002  // 40003 R  HW version (major<<8 | minor)
-#define HR_DEV_FW_VERSION     0x0003  // 40004 R  FW version (major<<8 | minor)
-#define HR_DEV_UNIT_ID        0x0004  // 40005 R  Unit ID efectivo (eco)
-#define HR_DEV_CAPS           0x0005  // 40006 R  Capacidades bitmask
-#define HR_DEV_UPTIME_LO      0x0006  // 40007 R  Uptime s (LSW)
-#define HR_DEV_UPTIME_HI      0x0007  // 40008 R  Uptime s (MSW)
-#define HR_DEV_STATUS         0x0008  // 40009 R  Estado bitmask
-#define HR_DEV_ERRORS         0x0009  // 40010 R  Errores bitmask
+#define HR_INFO_VENDOR_ID      0x0000  // 40001 R  Vendor (0x5446 = 'TF')
+#define HR_INFO_PRODUCTO_ID    0x0001  // 40002 R  Producto (0x4D30 = 'M0')
+#define HR_INFO_VERSION_HW     0x0002  // 40003 R  HW version (major<<8 | minor)
+#define HR_INFO_VERSION_FW     0x0003  // 40004 R  FW version (major<<8 | minor)
+#define HR_INFO_ID_UNIDAD      0x0004  // 40005 R  Unit ID efectivo (eco)
+#define HR_INFO_CAPACIDADES    0x0005  // 40006 R  Capacidades bitmask
+#define HR_INFO_UPTIME_S_LO    0x0006  // 40007 R  Uptime s (LSW)
+#define HR_INFO_UPTIME_S_HI    0x0007  // 40008 R  Uptime s (MSW)
+#define HR_INFO_ESTADO         0x0008  // 40009 R  Estado bitmask
+#define HR_INFO_ERRORES        0x0009  // 40010 R  Errores bitmask
 
 // -----------------------------
 // BLOQUE 2: Configuración (Holding 4xxxx, lectura/escritura)
 // -----------------------------
-#define HR_CFG_BAUDRATE_CODE  0x0010  // 40017 R/W  0=9600,1=19200,2=38400,3=57600,4=115200
-#define HR_CFG_MPU_LPF_HZ     0x0011  // 40018 R/W  Filtro MPU (Hz) codificado
-#define HR_CFG_SAVE_APPLY     0x0012  // 40019 W    0=noop, 0xA55A=save, 0xB007=apply
-#define HR_CMD_IDENT_SECS     0x0013  // 40020 W    Start Identify: segundos (0=stop)
-#define HR_CFG_UNIT_ID        0x0014  // 40021 R/W  Unit ID (1..247) (persistente)
-#define HR_CFG_RESERVED_END   0x001F  // reserva de 0x0015..0x001F
+#define HR_CFG_BAUDIOS         0x0010  // 40017 R/W  0=9600,1=19200,2=38400,3=57600,4=115200
+#define HR_CFG_MPU_FILTRO_HZ   0x0011  // 40018 R/W  Filtro MPU (Hz) codificado
+#define HR_CMD_GUARDAR_APLICAR 0x0012  // 40019 W    0=noop, 0xA55A=save, 0xB007=apply
+#define HR_CMD_IDENT_SEGUNDOS  0x0013  // 40020 W    Start Identify: segundos (0=stop)
+#define HR_CFG_ID_UNIDAD       0x0014  // 40021 R/W  Unit ID (1..247) (persistente)
+#define HR_CFG_RESERVED_END    0x001F  // reserva de 0x0015..0x001F
 
 // -----------------------------
 // BLOQUE 3: Medidas (Input 3xxxx, sólo lectura por maestro)
 // Dirección base 0 (equivalente 30001…)
 // -----------------------------
-#define IR_ANGLE_X_mDEG       0x0000  // 30001 R  Ángulo X en 0.01°
-#define IR_ANGLE_Y_mDEG       0x0001  // 30002 R  Ángulo Y en 0.01°
-#define IR_TEMP_mC            0x0002  // 30003 R  Temp 0.01°C
-#define IR_ACC_X_mG           0x0003  // 30004 R  Aceleración X en mg
-#define IR_ACC_Y_mG           0x0004  // 30005 R  Aceleración Y en mg
-#define IR_ACC_Z_mG           0x0005  // 30006 R  Aceleración Z en mg
-#define IR_GYR_X_mdps         0x0006  // 30007 R  Gyro X en mdps
-#define IR_GYR_Y_mdps         0x0007  // 30008 R  Gyro Y en mdps
-#define IR_GYR_Z_mdps         0x0008  // 30009 R  Gyro Z en mdps
-#define IR_SAMPLE_COUNT_LO    0x0009  // 30010 R  contador muestras (LSW)
-#define IR_SAMPLE_COUNT_HI    0x000A  // 30011 R  contador muestras (MSW)
-#define IR_FLAGS              0x000B  // 30012 R  flags de calidad (bitmask)
-#define IR_RESERVED_END       0x001F  // reserva
+#define IR_MED_ANGULO_X_CDEG   0x0000  // 30001 R  Ángulo X en 0.01°
+#define IR_MED_ANGULO_Y_CDEG   0x0001  // 30002 R  Ángulo Y en 0.01°
+#define IR_MED_TEMPERATURA_CENTI 0x0002  // 30003 R  Temp 0.01°C
+#define IR_MED_ACEL_X_mG       0x0003  // 30004 R  Aceleración X en mg
+#define IR_MED_ACEL_Y_mG       0x0004  // 30005 R  Aceleración Y en mg
+#define IR_MED_ACEL_Z_mG       0x0005  // 30006 R  Aceleración Z en mg
+#define IR_MED_GIRO_X_mdps     0x0006  // 30007 R  Gyro X en mdps
+#define IR_MED_GIRO_Y_mdps     0x0007  // 30008 R  Gyro Y en mdps
+#define IR_MED_GIRO_Z_mdps     0x0008  // 30009 R  Gyro Z en mdps
+#define IR_MED_MUESTRAS_LO     0x0009  // 30010 R  contador muestras (LSW)
+#define IR_MED_MUESTRAS_HI     0x000A  // 30011 R  contador muestras (MSW)
+#define IR_MED_FLAGS_CALIDAD   0x000B  // 30012 R  flags de calidad (bitmask)
+#define IR_RESERVED_END        0x001F  // reserva
 
 // -----------------------------
 // BLOQUE 4: Diagnóstico (Holding 4xxxx, lectura por maestro; escrituras internas)
 // -----------------------------
-#define HR_DIAG_RX_FRAMES     0x0020  // 40033 R  tramas RX OK
-#define HR_DIAG_RX_CRC_ERR    0x0021  // 40034 R  tramas RX con CRC malo
-#define HR_DIAG_RX_EXCPT      0x0022  // 40035 R  excepciones enviadas
-#define HR_DIAG_TX_FRAMES     0x0023  // 40036 R  tramas TX OK
-#define HR_DIAG_OVERRUNS      0x0024  // 40037 R  UART overruns
-#define HR_DIAG_LAST_EXCPT    0x0025  // 40038 R  último código de excepción
-#define HR_DIAG_RESERVED_END  0x002F  // reserva
+#define HR_DIAG_TRAMAS_RX_OK     0x0020  // 40033 R  tramas RX OK
+#define HR_DIAG_RX_CRC_ERROR     0x0021  // 40034 R  tramas RX con CRC malo
+#define HR_DIAG_RX_EXCEPCIONES   0x0022  // 40035 R  excepciones enviadas
+#define HR_DIAG_TRAMAS_TX_OK     0x0023  // 40036 R  tramas TX OK
+#define HR_DIAG_DESBORDES_UART   0x0024  // 40037 R  UART overruns
+#define HR_DIAG_ULTIMA_EXCEPCION 0x0025  // 40038 R  último código de excepción
+#define HR_DIAG_RESERVED_END     0x002F  // reserva
 
 // -----------------------------
 // Límites de mapa (para validación rápida) — ambos extremos incluidos
@@ -106,19 +106,19 @@ extern "C" {
 // -----------------------------
 // Máscaras de estado/errores/capacidades
 // -----------------------------
-enum : uint16_t {
+enum {
   DEV_CAP_RS485   = (1u<<0),
   DEV_CAP_MPU6050 = (1u<<1),
   DEV_CAP_IDENT   = (1u<<2),
 };
 
-enum : uint16_t {
+enum {
   DEV_STATUS_OK        = (1u<<0),
   DEV_STATUS_MPU_READY = (1u<<1),
   DEV_STATUS_CFG_DIRTY = (1u<<2),
 };
 
-enum : uint16_t {
+enum {
   DEV_ERR_NONE      = 0,
   DEV_ERR_MPU_COMM  = (1u<<0),
   DEV_ERR_EEPROM    = (1u<<1),

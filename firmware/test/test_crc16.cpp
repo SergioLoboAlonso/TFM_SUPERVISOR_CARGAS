@@ -20,11 +20,4 @@ void test_crc16_empty() {
 	TEST_ASSERT_EQUAL_HEX16(0xFFFF, crc);
 }
 
-void setup() {
-	UNITY_BEGIN();
-	RUN_TEST(test_crc16_known_vector);
-	RUN_TEST(test_crc16_empty);
-	UNITY_END();
-}
-
-void loop() {}
+// Las funciones de test se ejecutan desde otro archivo (test_modbus_map.cpp)

@@ -101,7 +101,7 @@ void ModbusRTU::sendResponse(const uint8_t* p, uint8_t n){
 void ModbusRTU::sendException(uint8_t unit, uint8_t func, uint8_t ex){
   uint8_t pdu[3] = { unit, uint8_t(func | 0x80), ex };
   sendResponse(pdu, sizeof(pdu));
-  regs_diag_inc(HR_DIAG_RX_EXCPT);
+  regs_diag_inc(HR_DIAG_RX_EXCEPCIONES);
 }
 
 // ---------- Handlers ----------
@@ -156,7 +156,7 @@ void ModbusRTU::handleRequest(const uint8_t* p, uint8_t n){
   // Validar CRC
   uint16_t rx_crc = uint16_t(p[n-2]) | (uint16_t(p[n-1])<<8);
   if(mb_crc16(p, n-2) != rx_crc){
-    regs_diag_inc(HR_DIAG_RX_CRC_ERR);
+  regs_diag_inc(HR_DIAG_RX_CRC_ERROR);
     return;
   }
 

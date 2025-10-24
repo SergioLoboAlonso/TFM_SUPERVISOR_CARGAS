@@ -73,7 +73,7 @@ create_if_absent "firmware/include/config_pins.h" \
 create_if_absent "firmware/include/firmware_version.h" \
 "$HDR_HEADER
 #pragma once
-// #define FW_VERSION_MAJOR 1
+// #define FW_VERSION_GLOBAL 1
 // #define FW_VERSION_MINOR 0
 // #define FW_VERSION_PATCH 0
 // #define HW_REV 1

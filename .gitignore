@@ -24,3 +24,6 @@ infra/mosquitto/data/
 # SO / miscelánea
 .DS_Store
 Thumbs.db
+
+# AI agent instructions (personalización local)
+.github/copilot-instructions.md

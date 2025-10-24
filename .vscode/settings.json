@@ -1,0 +1,4 @@
+{
+  "github.copilot.chat.model": "claude-3.5-sonnet",
+  "CodeGPT.apiKey": "OpenAI"
+}

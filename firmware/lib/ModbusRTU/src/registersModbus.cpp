@@ -126,7 +126,23 @@ bool regs_read_input(uint16_t addr, uint16_t count, uint16_t* out){
   }
   return true;
 }
-
+/**
+ * @brief Reads holding registers from the Modbus device
+ * 
+ * This function reads a specified number of consecutive holding registers
+ * starting from the given address and stores the values in the output buffer.
+ * 
+ * @param addr Starting address of the holding registers to read
+ * @param count Number of consecutive holding registers to read
+ * @param out Pointer to buffer where the read register values will be stored.
+ *            Buffer must be large enough to hold 'count' uint16_t values.
+ * 
+ * @return true if the read operation was successful
+ * @return false if the read operation failed (invalid address, communication error, etc.)
+ * 
+ * @note The caller is responsible for ensuring the output buffer has sufficient space
+ * @note Address range and count validity should be verified before calling this function
+ */
 bool regs_read_holding(uint16_t addr, uint16_t count, uint16_t* out){
   if (count==0 || count>MAX_HOLDING_READ) return false;
   if (!in_range(addr, HR_MIN_ADDR, HR_MAX_ADDR, count)) return false;

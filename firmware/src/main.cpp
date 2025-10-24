@@ -1,29 +1,51 @@
 // -----------------------------------------------------------------------------
-// main.cpp — Demo mínima: espera activa para hacer blink de identificación
-// - Sin Modbus, sin registros: sólo parpadeo de Identify mediante BlinkIdent.
-// - "Espera activa" = bucle loop sin delays bloqueantes; update() gestiona tiempos.
+// main.cpp — Integración: Modbus RTU + BlinkIdent (Identify)
+// - Conecta la escritura del registro HR_CMD_IDENT_SEGUNDOS con el patrón BlinkIdent.
+// - Bucle no bloqueante: Modbus.poll() + ident.update().
 // -----------------------------------------------------------------------------
 #include <Arduino.h>
 #include "config_pins.h"
 #include <BlinkIdent.h>
+#include <ModbusRTU.h>
+#include <registersModbus.h>
 
-// Instancia del identificador visual en el pin configurado
+// Identificación visual
 static BlinkIdent ident(IDENT_LED_PIN);
+// Servidor Modbus RTU
+static ModbusRTU mb_client;
+
+// Seguimiento del último valor aplicado de HR_CMD_IDENT_SEGUNDOS
+static uint16_t last_ident_secs = 0;
+
+static void apply_ident_from_register(){
+  uint16_t feedback = 0;
+  if (!regs_read_holding(HR_CMD_IDENT_SEGUNDOS, 1, &feedback)) return;
+  if (feedback == last_ident_secs) return; // Sin cambios
+  last_ident_secs = feedback;
+
+  if (feedback == 0) {
+    ident.stop();
+  } else {
+    ident.start(feedback);
+  }
+}
 
 void setup() {
-  // LED de estado opcional
   pinMode(STATUS_LED_PIN, OUTPUT);
   digitalWrite(STATUS_LED_PIN, LOW);
 
-  // Inicializa el controlador de identificación
-  ident.begin();
+  // Inicia Modbus RTU en el UART hardware y controla DE/RE del MAX485
+  mb_client.begin(Serial, UART_BAUDRATE, RS485_DERE_PIN);
 
-  // Arranca el patrón de identificación.
-  // Nota: puedes ajustar la duración (segundos). Aquí ejemplo 15s.
-  ident.start(15);
+  // Inicializa BlinkIdent
+  ident.begin();
+  ident.stop(); // Apagado hasta recibir comando
+  // Tras regs_init() (invocado por ModbusRTU::begin), lee valor inicial del comando
 }
 
 void loop() {
-  // Espera activa: actualiza el patrón en cada iteración (no bloquea)
+  // Procesa peticiones RTU y actualiza parpadeo de Identify
+  mb_client.poll();
+  apply_ident_from_register();
   ident.update();
 }

@@ -22,7 +22,7 @@ class BlinkIdent {
 	void start(uint16_t timeoutSeconds = 15);
 	void stop();
 	void update();
-	bool active() const { return active_; }
+	bool is_active() const { return active_; }
 
  private:
 	void driveLed(bool on);

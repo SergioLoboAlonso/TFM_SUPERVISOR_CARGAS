@@ -1,4 +1,4 @@
+pymodbus==3.6.6
 pyserial
-paho-mqtt
-pytest
-black
+flask
+python-dotenv

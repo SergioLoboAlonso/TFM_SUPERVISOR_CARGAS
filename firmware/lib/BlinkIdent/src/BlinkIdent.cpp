@@ -12,10 +12,10 @@
 
 // Patrón de doble parpadeo en una ventana de 1 segundo.
 // Se define la activación del LED en dos ventanas cortas:
-//  - 0..150 ms  → ON
-//  - 150..300 ms → OFF
-//  - 300..450 ms → ON
-//  - 450..1000 ms → OFF
+//  - 0 a 150 ms   ON
+//  - 150 a 300 ms  OFF
+//  - 300 a 450 ms  ON
+//  - 450 a 1000 ms  OFF
 // Devuelve true si el LED debe estar encendido para el instante (phaseMs) indicado.
 static inline bool patternDoubleBlink(uint32_t phaseMs) {
 	return (phaseMs < 150) || (phaseMs >= 300 && phaseMs < 450);
@@ -30,7 +30,7 @@ void BlinkIdent::begin() {
 	driveLed(false);
 }
 
-// Inicia el patrón de identificación durante "timeoutSeconds" segundos.
+// Función que inicia el patrón de identificación durante "timeoutSeconds" segundos.
 // No bloquea: únicamente se registran los tiempos de inicio y fin; el
 // parpadeo se gobierna desde update(). Se realiza una activación inmediata
 // para feedback visual instantáneo.

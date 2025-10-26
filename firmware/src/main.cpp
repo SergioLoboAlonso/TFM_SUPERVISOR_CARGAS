@@ -39,8 +39,7 @@ void setup() {
 
   // Inicializa BlinkIdent
   ident.begin();
-  ident.stop(); // Apagado hasta recibir comando
-  // Tras regs_init() (invocado por ModbusRTU::begin), lee valor inicial del comando
+  ident.start(15); // Apagado hasta recibir comando
 }
 
 void loop() {

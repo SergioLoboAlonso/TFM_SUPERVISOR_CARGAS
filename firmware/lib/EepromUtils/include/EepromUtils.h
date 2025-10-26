@@ -12,19 +12,19 @@ namespace EepromUtils {
 
 // Inicialización del backend EEPROM. En AVR no es necesaria, pero se expone
 // para mantener portabilidad futura (ESP requiere EEPROM.begin(N)).
-void begin();
+void begin();                                   // Inicializa backend EEPROM si aplica
 
 // Lectura/escritura de UnitID (1..247). Si no se ha provisionado, retorna 0.
-uint16_t readUnitId();
-void     writeUnitId(uint16_t uid);
+uint16_t readUnitId();                          // Lee Unit ID (1..247); 0 si no provisionado
+void     writeUnitId(uint16_t uid);             // Escribe Unit ID persistente
 
 // Serial de fábrica (32-bit en MVP). Si no hay valor, retorna 0.
-uint32_t readSerial();
-void     writeSerial(uint32_t serial);
+uint32_t readSerial();                          // Lee número de serie de fábrica (32 bits)
+void     writeSerial(uint32_t serial);          // Escribe número de serie
 
 // Alias ASCII (0..64B). 'out' debe admitir 65B para incluir terminador NUL.
-void readAlias(char* out, uint16_t& len);
-void writeAlias(const char* in, uint16_t len);
+void readAlias(char* out, uint16_t& len);       // Lee alias ASCII (out debe admitir 65B)
+void writeAlias(const char* in, uint16_t len);  // Escribe alias ASCII (hasta 64B)
 
 } // namespace EepromUtils
 

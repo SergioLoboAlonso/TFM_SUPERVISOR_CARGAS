@@ -17,18 +17,18 @@
 //         150ms OFF, 150ms ON, resto en OFF), repetido hasta timeout.
 class BlinkIdent {
  public:
-	explicit BlinkIdent(uint8_t pin);
-	void begin();
-	void start(uint16_t timeoutSeconds = 15);
-	void stop();
-	void update();
-	bool is_active() const { return active_; }
+	explicit BlinkIdent(uint8_t pin);                 // pin: GPIO del LED de identificación
+	void begin();                                     // Configura el pin y deja el LED en estado inactivo
+	void start(uint16_t timeoutSeconds = 15);         // Inicia patrón con timeout (segundos); 0 = indefinido
+	void stop();                                      // Detiene el patrón y apaga el LED
+	void update();                                    // Avanza el patrón; llamar frecuentemente en loop()
+	bool is_active() const { return active_; }        // Indica si el patrón está activo
 
  private:
-	void driveLed(bool on);
+	void driveLed(bool on);                           // Escribe el estado del LED respetando la lógica activa
 
-	uint8_t pin_;
-	bool active_ = false;
-	uint32_t startMs_ = 0;
-	uint32_t timeoutMs_ = 0;
+	uint8_t pin_;                                     // Pin del LED
+	bool active_ = false;                             // Estado actual del patrón (activo/inactivo)
+	uint32_t startMs_ = 0;                            // Marca temporal de inicio (ms)
+	uint32_t timeoutMs_ = 0;                          // Duración total del patrón (ms)
 };

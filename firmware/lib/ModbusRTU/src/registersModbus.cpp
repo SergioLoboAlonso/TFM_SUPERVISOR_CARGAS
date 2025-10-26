@@ -13,45 +13,39 @@
 // -----------------------------------------------------------------------------
 #include "registersModbus.h"
 #include <string.h>
+#include "firmware_version.h" // Unifica versión HW/FW desde cabecera común
 
 // -----------------------------
 // Defaults de compilación
 // -----------------------------
+// Estas macros pueden inyectarse desde platformio.ini (build_flags) para personalizar
+// UnitID y versiones HW/FW en tiempo de compilación.
 #ifndef UNIT_ID
-  #define UNIT_ID 1
+  #define UNIT_ID 1      // Unit ID por defecto (1..247)
 #endif
-#ifndef FW_VER_MAJOR
-  #define FW_VER_MAJOR 0x01
-#endif
-#ifndef FW_VER_MINOR
-  #define FW_VER_MINOR 0x00
-#endif
-#ifndef HW_VER_MAJOR
-  #define HW_VER_MAJOR 0x01
-#endif
-#ifndef HW_VER_MINOR
-  #define HW_VER_MINOR 0x00
-#endif
+// Versionado ahora proviene de firmware_version.h (FW_VERSION_*, HW_REV)
 
 // -----------------------------
 // Estado interno
 // -----------------------------
+// Estado interno del dispositivo. Representa el "mapa" que el maestro ve.
+// Las unidades/formatos siguen el contrato de registersModbus.h
 static struct {
   // Info
   uint16_t vendor_id   = 0x5446;                 // 'T''F'
   uint16_t product_id  = 0x4D30;                 // 'M''0'
-  uint16_t hw_version  = (HW_VER_MAJOR<<8) | HW_VER_MINOR;
-  uint16_t fw_version  = (FW_VER_MAJOR<<8) | FW_VER_MINOR;
-  uint16_t unit_id     = UNIT_ID;
-  uint16_t caps        = (DEV_CAP_RS485|DEV_CAP_MPU6050|DEV_CAP_IDENT);
-  uint16_t status      = DEV_STATUS_OK;
-  uint16_t errors      = DEV_ERR_NONE;
+  uint16_t hw_version  = (uint16_t)((HW_REV & 0xFF) << 8) | 0x00;                         // HW: mayor=HW_REV, menor=0
+  uint16_t fw_version  = (uint16_t)((FW_VERSION_GLOBAL & 0xFF) << 8) | (FW_VERSION_MINOR & 0xFF); // FW: mayor/menor
+  uint16_t unit_id     = UNIT_ID;                // Unit ID efectivo
+  uint16_t caps        = (DEV_CAP_RS485|DEV_CAP_MPU6050|DEV_CAP_IDENT); // Capacidades
+  uint16_t status      = DEV_STATUS_OK;          // Flags de estado
+  uint16_t errors      = DEV_ERR_NONE;           // Flags de error
 
   // Config
   uint16_t baud_code   = 4;                      // 115200
   uint16_t mpu_lpf_hz  = 42;                     // ejemplo codificado
-  uint16_t save_apply  = 0;
-  uint16_t ident_secs  = 0;
+  uint16_t save_apply  = 0;                      // Último comando de guardar/aplicar
+  uint16_t ident_secs  = 0;                      // Timeout de identify (segundos)
 
   // Medidas
   int16_t  ang_x_mdeg  = 0;
@@ -63,15 +57,15 @@ static struct {
   int16_t  gyr_x_mdps  = 0;
   int16_t  gyr_y_mdps  = 0;
   int16_t  gyr_z_mdps  = 0;
-  uint32_t sample_cnt  = 0;
+  uint32_t sample_cnt  = 0;                      // Contador de muestras (32 bits)
 
   // Diagnóstico
-  uint16_t rx_frames   = 0;
-  uint16_t rx_crc_err  = 0;
-  uint16_t rx_excpt    = 0;
-  uint16_t tx_frames   = 0;
-  uint16_t overruns    = 0;
-  uint16_t last_excpt  = 0;
+  uint16_t rx_frames   = 0;                      // Tramas RX OK
+  uint16_t rx_crc_err  = 0;                      // Tramas RX con CRC erróneo
+  uint16_t rx_excpt    = 0;                      // Excepciones enviadas
+  uint16_t tx_frames   = 0;                      // Tramas TX OK
+  uint16_t overruns    = 0;                      // Desbordes UART
+  uint16_t last_excpt  = 0;                      // Último código de excepción
 } R;
 
 // -----------------------------
@@ -83,6 +77,7 @@ static inline uint16_t uptime_lo() {
 static inline uint16_t uptime_hi() {
   return (uint16_t)(((millis()/1000UL) >> 16) & 0xFFFF);
 }
+// Comprueba si [addr, addr+count-1] cae dentro de [min_a, max_a]
 static inline bool in_range(uint16_t addr, uint16_t min_a, uint16_t max_a, uint16_t count){
   if (addr < min_a) return false;
   if (addr > max_a) return false;
@@ -94,7 +89,7 @@ static inline bool in_range(uint16_t addr, uint16_t min_a, uint16_t max_a, uint1
 // Init
 // -----------------------------
 void regs_init(void){
-  // Limpia estados transitorios si aplica
+  // Limpia estados transitorios si aplica; mantiene vendor/product/versiones
   R.status = (DEV_STATUS_OK);
   R.errors = DEV_ERR_NONE;
 }
@@ -102,6 +97,7 @@ void regs_init(void){
 // -----------------------------
 // Lecturas
 // -----------------------------
+// 0x04 — Input Registers: sólo lectura
 bool regs_read_input(uint16_t addr, uint16_t count, uint16_t* out){
   if (count==0 || count>MAX_INPUT_READ) return false;
   if (!in_range(addr, IR_MIN_ADDR, IR_MAX_ADDR, count)) return false;
@@ -109,19 +105,19 @@ bool regs_read_input(uint16_t addr, uint16_t count, uint16_t* out){
   for (uint16_t i=0;i<count;i++){
     uint16_t a = addr + i;
     switch(a){
-  case IR_MED_ANGULO_X_CDEG:    out[i] = (uint16_t)R.ang_x_mdeg; break;
-  case IR_MED_ANGULO_Y_CDEG:    out[i] = (uint16_t)R.ang_y_mdeg; break;
-  case IR_MED_TEMPERATURA_CENTI:out[i] = (uint16_t)R.temp_mc;    break;
-  case IR_MED_ACEL_X_mG:        out[i] = (uint16_t)R.acc_x_mg;   break;
-  case IR_MED_ACEL_Y_mG:        out[i] = (uint16_t)R.acc_y_mg;   break;
-  case IR_MED_ACEL_Z_mG:        out[i] = (uint16_t)R.acc_z_mg;   break;
-  case IR_MED_GIRO_X_mdps:      out[i] = (uint16_t)R.gyr_x_mdps; break;
-  case IR_MED_GIRO_Y_mdps:      out[i] = (uint16_t)R.gyr_y_mdps; break;
-  case IR_MED_GIRO_Z_mdps:      out[i] = (uint16_t)R.gyr_z_mdps; break;
-  case IR_MED_MUESTRAS_LO:      out[i] = (uint16_t)(R.sample_cnt & 0xFFFF); break;
-  case IR_MED_MUESTRAS_HI:      out[i] = (uint16_t)((R.sample_cnt>>16) & 0xFFFF); break;
-  case IR_MED_FLAGS_CALIDAD:     out[i] = 0; break; // placeholder de calidad
-      default:                 out[i] = 0; break; // reservas → 0
+      case IR_MED_ANGULO_X_CDEG:    out[i] = (uint16_t)R.ang_x_mdeg; break;
+      case IR_MED_ANGULO_Y_CDEG:    out[i] = (uint16_t)R.ang_y_mdeg; break;
+      case IR_MED_TEMPERATURA_CENTI:out[i] = (uint16_t)R.temp_mc;    break;
+      case IR_MED_ACEL_X_mG:        out[i] = (uint16_t)R.acc_x_mg;   break;
+      case IR_MED_ACEL_Y_mG:        out[i] = (uint16_t)R.acc_y_mg;   break;
+      case IR_MED_ACEL_Z_mG:        out[i] = (uint16_t)R.acc_z_mg;   break;
+      case IR_MED_GIRO_X_mdps:      out[i] = (uint16_t)R.gyr_x_mdps; break;
+      case IR_MED_GIRO_Y_mdps:      out[i] = (uint16_t)R.gyr_y_mdps; break;
+      case IR_MED_GIRO_Z_mdps:      out[i] = (uint16_t)R.gyr_z_mdps; break;
+      case IR_MED_MUESTRAS_LO:      out[i] = (uint16_t)(R.sample_cnt & 0xFFFF); break;
+      case IR_MED_MUESTRAS_HI:      out[i] = (uint16_t)((R.sample_cnt>>16) & 0xFFFF); break;
+      case IR_MED_FLAGS_CALIDAD:     out[i] = 0; break; // placeholder de calidad
+          default:                 out[i] = 0; break; // reservas → 0 para estabilidad
     }
   }
   return true;
@@ -143,6 +139,7 @@ bool regs_read_input(uint16_t addr, uint16_t count, uint16_t* out){
  * @note The caller is responsible for ensuring the output buffer has sufficient space
  * @note Address range and count validity should be verified before calling this function
  */
+// 0x03 — Holding Registers: info, config y diagnóstico
 bool regs_read_holding(uint16_t addr, uint16_t count, uint16_t* out){
   if (count==0 || count>MAX_HOLDING_READ) return false;
   if (!in_range(addr, HR_MIN_ADDR, HR_MAX_ADDR, count)) return false;
@@ -177,7 +174,7 @@ bool regs_read_holding(uint16_t addr, uint16_t count, uint16_t* out){
   case HR_DIAG_DESBORDES_UART:   out[i] = R.overruns;   break;
   case HR_DIAG_ULTIMA_EXCEPCION: out[i] = R.last_excpt; break;
 
-      default: out[i] = 0; break;
+      default: out[i] = 0; break; // reservas → 0
     }
   }
   return true;
@@ -186,14 +183,16 @@ bool regs_read_holding(uint16_t addr, uint16_t count, uint16_t* out){
 // -----------------------------
 // Escrituras (0x06 single)
 // -----------------------------
+// 0x06 — Escritura single register (Holding). Valida rango/valor.
 bool regs_write_holding(uint16_t addr, uint16_t value){
   switch(addr){
   case HR_CFG_BAUDIOS:
-      if (value<=4){ R.baud_code = value; R.status |= DEV_STATUS_CFG_DIRTY; return true; }
+    // Códigos válidos 0..4 (9600..115200). Marca CFG_DIRTY para aplicar más tarde.
+    if (value<=4){ R.baud_code = value; R.status |= DEV_STATUS_CFG_DIRTY; return true; }
       R.errors |= DEV_ERR_RANGE; return false;
 
   case HR_CFG_MPU_FILTRO_HZ:
-      // acepta rango típico codificado (ejemplo 5..98 Hz codificados)
+    // Acepta rango típico codificado (ejemplo 5..98 Hz codificados); aquí laxamente <=200
       if (value<=200){ R.mpu_lpf_hz = value; R.status |= DEV_STATUS_CFG_DIRTY; return true; }
       R.errors |= DEV_ERR_RANGE; return false;
 
@@ -202,11 +201,11 @@ bool regs_write_holding(uint16_t addr, uint16_t value){
       R.errors |= DEV_ERR_RANGE; return false;
 
   case HR_CMD_IDENT_SEGUNDOS:
-      R.ident_secs = value;  // la capa superior iniciará/parará el patrón
+    R.ident_secs = value;  // la capa superior iniciará/parará el patrón BlinkIdent
       return true;
 
   case HR_CMD_GUARDAR_APLICAR:
-      // claves: 0xA55A=save, 0xB007=apply
+    // Claves de control: 0xA55A=save, 0xB007=apply (sin efecto aquí; lo procesa capa superior)
       if (value==0xA55A || value==0xB007){ R.save_apply = value; return true; }
       R.errors |= DEV_ERR_RANGE; return false;
 

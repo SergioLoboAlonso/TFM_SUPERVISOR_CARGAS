@@ -21,7 +21,7 @@
 #elif defined(ARDUINO_AVR_NANO)
   #define BOARD_NAME "Arduino NANO" // Alternativa habitual
 #else
-  #define BOARD_NAME "Arduino (AVR genérico)"
+  #define BOARD_NAME "Arduino (AVR genérico)" // Identificador genérico de placa
 #endif
 
 // -----------------------------
@@ -57,16 +57,16 @@
 
 // LED de identificación por defecto: se utiliza el LED de la placa si no se define otro
 #ifndef IDENT_LED_PIN
-  #define IDENT_LED_PIN LED_BUILTIN
+  #define IDENT_LED_PIN LED_BUILTIN // LED por defecto para identificación
 #endif
 // Definiciones de activación del LED de identificación, más visuales para saber si está activo o no
 
 #ifndef LED_ACTIVE
-  #define LED_ACTIVE HIGH
+  #define LED_ACTIVE HIGH // Nivel lógico para encender LED
 #endif
 
 #ifndef LED_INACTIVE
-  #define LED_INACTIVE LOW
+  #define LED_INACTIVE LOW // Nivel lógico para apagar LED
 #endif
 
 // -----------------------------
@@ -76,16 +76,16 @@
 // Wire utiliza automáticamente estos pines; no es necesario configurarlos manualmente.
 // Se dejan definidos a modo de documentación.
 #ifndef I2C_SDA_PIN
-  #define I2C_SDA_PIN A4
+  #define I2C_SDA_PIN A4 // Pin SDA en UNO/NANO
 #endif
 #ifndef I2C_SCL_PIN
-  #define I2C_SCL_PIN A5
+  #define I2C_SCL_PIN A5 // Pin SCL en UNO/NANO
 #endif
 
 // Dirección I2C del MPU-6050: AD0 a GND → 0x68; a VCC → 0x69.
 // Si el pin AD0 queda flotante puede producirse fallo; en GY-521 suele quedar 0x68 por pull-down.
 #ifndef MPU6050_I2C_ADDR
-  #define MPU6050_I2C_ADDR 0x68
+  #define MPU6050_I2C_ADDR 0x68 // Dirección I2C por defecto del MPU-6050
 #endif
 
 // -----------------------------

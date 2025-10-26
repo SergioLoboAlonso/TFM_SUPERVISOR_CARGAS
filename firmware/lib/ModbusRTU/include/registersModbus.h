@@ -12,6 +12,12 @@
 // - Endianness: cada palabra Modbus es big-endian (MSB→LSB). Si en futuro se usan
 //   valores de 32 bits, se deberán componer dos registros contiguos MSW/LSW.
 //
+// Uso típico desde la capa Modbus:
+// - Para lecturas: el servidor llamará regs_read_input/holding(addr,count,out) con
+//   validación previa de límites. Si retorna false → Excepción Illegal Address.
+// - Para escrituras (0x06): regs_write_holding(addr,value) — true si aceptada;
+//   false → Excepción Illegal Data Value/Address según proceda.
+//
 // Contrato de la API regs_*
 // - regs_read_* devuelven true si TODA la ventana solicitada es válida; si cualquiera
 //   de las direcciones cae fuera de rango o no es soportada, devuelven false.
@@ -59,7 +65,7 @@ extern "C" {
 // -----------------------------
 // BLOQUE 2: Configuración (Holding 4xxxx, lectura/escritura)
 // -----------------------------
-#define HR_CFG_BAUDIOS         0x0010  // 40017 R/W  0=9600,1=19200,2=38400,3=57600,4=115200
+#define HR_CFG_BAUDIOS         0x0010  // 40017 R/W  Código baudios: 0=9600,1=19200,2=38400,3=57600,4=115200
 #define HR_CFG_MPU_FILTRO_HZ   0x0011  // 40018 R/W  Filtro MPU (Hz) codificado
 #define HR_CMD_GUARDAR_APLICAR 0x0012  // 40019 W    0=noop, 0xA55A=save, 0xB007=apply
 #define HR_CMD_IDENT_SEGUNDOS  0x0013  // 40020 W    Start Identify: segundos (0=stop)
@@ -106,23 +112,28 @@ extern "C" {
 // -----------------------------
 // Máscaras de estado/errores/capacidades
 // -----------------------------
+
+// Duración por defecto del Identify cuando se solicita por 0x11 (segundos)
+#ifndef IDENTIFY_DEFAULT_SECS
+#define IDENTIFY_DEFAULT_SECS 5
+#endif
 enum {
-  DEV_CAP_RS485   = (1u<<0),
-  DEV_CAP_MPU6050 = (1u<<1),
-  DEV_CAP_IDENT   = (1u<<2),
+  DEV_CAP_RS485   = (1u<<0), // Soporta comunicación RS‑485
+  DEV_CAP_MPU6050 = (1u<<1), // Integra sensor MPU‑6050
+  DEV_CAP_IDENT   = (1u<<2), // Soporta Identify (parpadeo LED)
 };
 
 enum {
-  DEV_STATUS_OK        = (1u<<0),
-  DEV_STATUS_MPU_READY = (1u<<1),
-  DEV_STATUS_CFG_DIRTY = (1u<<2),
+  DEV_STATUS_OK        = (1u<<0), // Estado general OK
+  DEV_STATUS_MPU_READY = (1u<<1), // Lecturas del MPU disponibles
+  DEV_STATUS_CFG_DIRTY = (1u<<2), // Config pendiente de aplicar/guardar
 };
 
 enum {
-  DEV_ERR_NONE      = 0,
-  DEV_ERR_MPU_COMM  = (1u<<0),
-  DEV_ERR_EEPROM    = (1u<<1),
-  DEV_ERR_RANGE     = (1u<<2),
+  DEV_ERR_NONE      = 0,        // Sin errores
+  DEV_ERR_MPU_COMM  = (1u<<0),  // Error de comunicación con MPU
+  DEV_ERR_EEPROM    = (1u<<1),  // Error acceso EEPROM
+  DEV_ERR_RANGE     = (1u<<2),  // Valor fuera de rango
 };
 
 // -----------------------------
@@ -130,21 +141,37 @@ enum {
 // - Devuelven true si operación válida, false si fuera de rango o ilegal.
 // - Los buffers de salida son array de uint16_t (cada entrada = 1 registro Modbus).
 // - Orden de palabra: el servidor aplica big-endian al serializar; aquí se usa uint16_t nativo.
+// - Concurrencia: no bloquean; deben llamarse desde el bucle principal (no ISR a menos que se garantice seguridad).
 // -----------------------------
 void regs_init(void);
 
 // Lecturas
-bool regs_read_input (uint16_t addr, uint16_t count, uint16_t* out);    // 0x04
-bool regs_read_holding(uint16_t addr, uint16_t count, uint16_t* out);   // 0x03
+
+// 0x04: Lee 'count' registros Input consecutivos a partir de 'addr' en 'out'.
+// Precondición: 'out' apunta a buffer con al menos 'count' uint16_t.
+bool regs_read_input (uint16_t addr, uint16_t count, uint16_t* out);
+// 0x03: Lee 'count' registros Holding consecutivos a partir de 'addr' en 'out'.
+// Incluye Info, Config y Diagnóstico. Algunas direcciones devuelven "eco" del último valor escrito.
+bool regs_read_holding(uint16_t addr, uint16_t count, uint16_t* out);
 
 // Escrituras
-bool regs_write_holding(uint16_t addr, uint16_t value);                  // 0x06 (single)
+
+// 0x06 (single): Escribe un registro Holding en 'addr' con 'value'. Validaciones:
+//  - HR_CFG_BAUDIOS: 0..4 (códigos de baudios)
+//  - HR_CFG_MPU_FILTRO_HZ: rango codificado (p.ej. <=200)
+//  - HR_CFG_ID_UNIDAD: 1..247
+//  - HR_CMD_IDENT_SEGUNDOS: cualquier valor (0=stop)
+//  - HR_CMD_GUARDAR_APLICAR: 0xA55A ó 0xB007
+bool regs_write_holding(uint16_t addr, uint16_t value);
 
 // Hooks para que otras capas (sensores/lógica) actualicen valores en tiempo real
+// Ángulos X/Y en décimas de grado (mdeg)
 void regs_set_angles_mdeg(int16_t ax, int16_t ay);
 void regs_set_temp_mc(int16_t mc);
 void regs_set_acc_mg(int16_t x, int16_t y, int16_t z);
 void regs_set_gyr_mdps(int16_t x, int16_t y, int16_t z);
+
+// Incrementa contador de muestras (32 bits expuesto como L/H en IR_MED_MUESTRAS_*)
 void regs_bump_sample_counter(void);
 
 // Estadísticas/diagnóstico: permiten que la capa Modbus incremente contadores y flags

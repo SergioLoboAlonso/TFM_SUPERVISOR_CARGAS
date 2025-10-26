@@ -5,9 +5,18 @@
   <h1>TFM Edge Modbus</h1>
   <div>
     <label>UNIT_ID: <input id="unit" type="number" min="1" max="247" value="1"></label>
-    <label>Identify (seg): <input id="secs" type="number" min="0" max="600" value="10"></label>
-    <button id="btn">Identify</button>
+    <button id="btn">Identify (0x11)</button>
+    <button id="btn41">Trigger Identify (0x41)</button>
   </div>
+  <div style="margin-top:8px;">
+    <label>Segundos:
+      <input id="secs" type="number" min="0" max="600" value="5">
+    </label>
+    <button id="btn_secs">Escribir HR_CMD_IDENT_SECS (0x06)</button>
+  </div>
+  <h3>Identify</h3>
+  <pre id="identify_info">—</pre>
+  <h3>Estado</h3>
   <pre id="data">cargando…</pre>
   <script src="/static/main.js"></script>
 </body>

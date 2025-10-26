@@ -19,6 +19,8 @@
 // -----------------------------------------------------------------------------
 #include "ModbusRTU.h"
 #include "registersModbus.h"
+#include "crc16_utils.h" // Unifica CRC usando utilidades comunes
+#include "firmware_version.h" // Para componer la respuesta de Identify (0x11)
 
 // ---------- Config mínimos ----------
 #ifndef UNIT_ID
@@ -33,20 +35,7 @@ enum : uint8_t {
   MB_EX_SERVER_DEVICE_FAIL  = 0x04
 };
 
-// ---------- CRC16 (Modbus, LSB primero) ----------
-// Implementación clásica Modbus: inicial 0xFFFF, inversión LSB-first en la palabra.
-static uint16_t mb_crc16(const uint8_t* p, uint16_t len){
-  uint16_t crc = 0xFFFF;
-  while(len--){
-    crc ^= *p++;
-    for(uint8_t i=0;i<8;i++){
-      if(crc & 0x0001) crc = (crc >> 1) ^ 0xA001;
-      else             crc = (crc >> 1);
-    }
-  }
-  return crc;
-}
-
+// (El CRC16 se calcula con modbus_crc16() de utils)
 // ---------- Utilidades ----------
 static inline uint16_t u16_be(const uint8_t* p){ return (uint16_t(p[0])<<8) | p[1]; }
 static inline void     put_u16_be(uint8_t* p, uint16_t v){ p[0]=uint8_t(v>>8); p[1]=uint8_t(v&0xFF); }
@@ -86,14 +75,18 @@ void ModbusRTU::sendResponse(const uint8_t* p, uint8_t n){
   uint8_t buf[256];
   if(n > 252) return;                             // margen para CRC
   memcpy(buf, p, n);
-  uint16_t crc = mb_crc16(buf, n);
+  uint16_t crc = modbus_crc16(buf, n);           // CRC16 común (utils)
   buf[n++] = uint8_t(crc & 0xFF);                 // CRC L
   buf[n++] = uint8_t(crc >> 8);                   // CRC H
 
   setTransmit(true);
   m_serial->write(buf, n);
   m_serial->flush();                               // espera TX vacía
-  // opcional: espera ~1 char si tu transceptor lo requiere
+  // Pequeña guarda para asegurar que el transceptor RS‑485 completa el envío
+  // antes de volver a modo recepción (ayuda en algunos MAX485 puentados DE/RE)
+  if(t15_us > 0){
+    delayMicroseconds(t15_us);
+  }
   setTransmit(false);
 }
 
@@ -152,10 +145,11 @@ void ModbusRTU::handleWriteSingle(uint8_t unit, uint16_t reg, uint16_t value, bo
 
 // ---------- Parser de petición ----------
 void ModbusRTU::handleRequest(const uint8_t* p, uint8_t n){
-  if(n < 8) return;                                // mínimo RTU
+  // Mínimo absoluto para RTU: unit(1) + func(1) + CRC(2) = 4 bytes
+  if(n < 4) return;
   // Validar CRC
   uint16_t rx_crc = uint16_t(p[n-2]) | (uint16_t(p[n-1])<<8);
-  if(mb_crc16(p, n-2) != rx_crc){
+  if(modbus_crc16(p, n-2) != rx_crc){            // Verificación CRC con utils
   regs_diag_inc(HR_DIAG_RX_CRC_ERROR);
     return;
   }
@@ -169,8 +163,10 @@ void ModbusRTU::handleRequest(const uint8_t* p, uint8_t n){
     return;
   }
 
+  // Validación mínima por función (algunas no llevan campo de dirección/contador)
   switch(func){
     case 0x03: { // Read Holding
+      // unit, func, startHi, startLo, cntHi, cntLo, crcLo, crcHi
       if(n < 8){ sendException(unit, func, MB_EX_ILLEGAL_DATA_VALUE); return; }
       uint16_t start = u16_be(&p[2]);
       uint16_t count = u16_be(&p[4]);
@@ -189,6 +185,18 @@ void ModbusRTU::handleRequest(const uint8_t* p, uint8_t n){
       uint16_t reg   = u16_be(&p[2]);
       uint16_t value = u16_be(&p[4]);
       handleWriteSingle(unit, reg, value, isBroadcast);
+      break;
+    }
+    case 0x11: { // Report Slave ID (Identify)
+      // Petición sin datos: unit, func, crcLo, crcHi
+      if(n < 4){ sendException(unit, func, MB_EX_ILLEGAL_DATA_VALUE); return; }
+      handleReportSlaveId(unit); // Sólo información; sin trigger
+      break;
+    }
+    case 0x41: { // Proprietary Identify + Info
+      // Petición sin datos: unit, func, crcLo, crcHi
+      if(n < 4){ sendException(unit, func, MB_EX_ILLEGAL_DATA_VALUE); return; }
+      handleIdentifyBlinkAndInfo(unit);
       break;
     }
     default:
@@ -222,4 +230,58 @@ void ModbusRTU::poll(){
     handleRequest(m_rxBuf, m_rxLen);
     clearRx();
   }
+}
+
+// ---------- Report Slave ID (0x11) ----------
+void ModbusRTU::handleReportSlaveId(uint8_t unit){
+
+  // Construye una respuesta con Vendor, Modelo y Versión firmware.
+  // Formato: [unit][0x11][byteCount][slaveId][runIndicator][ascii...]
+  char info[160];
+  // Cadena tipo: VENDOR=..;MODEL=..;FW=..
+  // Nota: las macros provienen de firmware_version.h
+
+  // Componer cadena (evitar snprintf de gran tamaño en AVR si se prefiere)
+    uint8_t asciiLen = fv_build_identity_ascii(info, sizeof(info));
+
+  // Construcción de PDU
+  uint8_t resp[256];
+  resp[0] = unit;
+  resp[1] = 0x11;
+  // [2] = byteCount (rellenar después)
+  uint8_t idx = 3;
+  resp[idx++] = UNIT_ID;      // slaveId
+  resp[idx++] = 0xFF;         // runIndicator (0xFF = en marcha)
+  // Copiar ascii
+  const uint8_t maxAscii = (uint8_t)(sizeof(resp) - idx - 2); // reserva para CRC en capa sendResponse
+    if(asciiLen > maxAscii) asciiLen = maxAscii;
+  memcpy(&resp[idx], info, asciiLen);
+  idx += asciiLen;
+
+  // Byte count incluye slaveId + runIndicator + ascii
+  resp[2] = (uint8_t)(2 + asciiLen);
+  sendResponse(resp, idx);
+}
+
+// ---------- Identify + Info (0x41 propietaria) ----------
+void ModbusRTU::handleIdentifyBlinkAndInfo(uint8_t unit){
+  // Disparar Identify por defecto
+  regs_write_holding(HR_CMD_IDENT_SEGUNDOS, IDENTIFY_DEFAULT_SECS);
+  // Construye respuesta tipo 0x11 pero con func=0x41
+
+  char info[160];
+    uint8_t asciiLen = fv_build_identity_ascii(info, sizeof(info));
+
+  uint8_t resp[256];
+  resp[0] = unit;
+  resp[1] = 0x41; // función propietaria
+  uint8_t idx = 3;
+  resp[idx++] = UNIT_ID;      // slaveId
+  resp[idx++] = 0xFF;         // runIndicator
+  const uint8_t maxAscii = (uint8_t)(sizeof(resp) - idx - 2);
+    if(asciiLen > maxAscii) asciiLen = maxAscii;
+  memcpy(&resp[idx], info, asciiLen);
+  idx += asciiLen;
+  resp[2] = (uint8_t)(2 + asciiLen);
+  sendResponse(resp, idx);
 }

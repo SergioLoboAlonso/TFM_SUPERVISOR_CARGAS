@@ -9,15 +9,38 @@
     <button id="btn41">Trigger Identify (0x41)</button>
   </div>
   <div style="margin-top:8px;">
+    <label>Scan IDs:
+      <input id="scan_start" type="number" min="1" max="247" value="1" style="width:70px"> -
+      <input id="scan_end" type="number" min="1" max="247" value="16" style="width:70px">
+    </label>
+    <button id="btn_scan">Escanear</button>
+  </div>
+  <div style="margin-top:8px;">
     <label>Segundos:
       <input id="secs" type="number" min="0" max="600" value="5">
     </label>
     <button id="btn_secs">Escribir HR_CMD_IDENT_SECS (0x06)</button>
   </div>
+  <div style="margin-top:8px;">
+    <label>Alias (0..64B):
+      <input id="alias" type="text" maxlength="64" placeholder="default">
+    </label>
+    <button id="btn_alias">Guardar alias (0x10)</button>
+  </div>
   <h3>Identify</h3>
   <pre id="identify_info">—</pre>
+  <h3>Scan</h3>
+  <pre id="scan_out">—</pre>
+  <h3>Resumen</h3>
+  <ul>
+    <li>Vendor: <span id="vendor_str">—</span></li>
+    <li>ID Alias: <span id="alias_str">—</span></li>
+    <li>FW: <span id="fw_str">—</span></li>
+    <li>HW: <span id="hw_str">—</span></li>
+    <li>Product: <span id="product_str">—</span></li>
+  </ul>
   <h3>Estado</h3>
   <pre id="data">cargando…</pre>
-  <script src="/static/main.js"></script>
+  <script src="/static/main.js?v=20251027b"></script>
 </body>
 </html>

@@ -18,16 +18,25 @@ static ModbusRTU mb_client;                 // Esclavo Modbus RTU sobre UART HW
 static uint16_t last_ident_secs = 0;        // Cache del último timeout de Identify
 
 static void apply_ident_from_register(){     // Aplica cambios de HR_CMD_IDENT_SEGUNDOS a BlinkIdent
+  static uint16_t last_seq = 0;             // Última secuencia observada
   uint16_t feedback = 0;                    // Lectura eco del registro (último valor escrito)
   if (!regs_read_holding(HR_CMD_IDENT_SEGUNDOS, 1, &feedback)) return;
-  if (feedback == last_ident_secs) return; // Sin cambios
-  last_ident_secs = feedback;
 
-  if (feedback == 0) {
-    ident.stop();
-  } else {
-    ident.start(feedback);
+  // Detecta evento de escritura real (incluyendo re‑escritura del mismo valor)
+  uint16_t seq = regs_get_ident_write_seq();
+  if (seq != last_seq) {
+    last_seq = seq;
+    if (feedback == 0) {
+      // Solicitud explícita de parada
+      if (ident.is_active()) ident.stop();
+      last_ident_secs = 0;
+    } else {
+      // Nueva orden de Identify: iniciar o reiniciar
+      ident.start(feedback);
+      last_ident_secs = feedback;
+    }
   }
+  // Si no hay nueva escritura, no hacer nada: evita rearmado automático al expirar
 }
 
 void setup() {
@@ -47,6 +56,7 @@ void setup() {
 void loop() {
   // Procesa peticiones RTU y actualiza parpadeo de Identify
   mb_client.poll();
-  //apply_ident_from_register();
+  apply_ident_from_register();
   ident.update();
+  
 }

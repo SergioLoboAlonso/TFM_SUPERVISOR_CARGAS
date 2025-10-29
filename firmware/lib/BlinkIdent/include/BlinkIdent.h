@@ -19,7 +19,7 @@ class BlinkIdent {
  public:
 	explicit BlinkIdent(uint8_t pin);                 // pin: GPIO del LED de identificación
 	void begin();                                     // Configura el pin y deja el LED en estado inactivo
-	void start(uint16_t timeoutSeconds = 15);         // Inicia patrón con timeout (segundos); 0 = indefinido
+	void start(uint16_t timeoutSeconds = 5);         // Inicia patrón con timeout (segundos); 0 = indefinido
 	void stop();                                      // Detiene el patrón y apaga el LED
 	void update();                                    // Avanza el patrón; llamar frecuentemente en loop()
 	bool is_active() const { return active_; }        // Indica si el patrón está activo

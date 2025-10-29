@@ -1,28 +1,30 @@
 // -----------------------------------------------------------------------------
 // registersModbus.h — Mapa de registros Modbus RTU conforme a la norma
-// Proyecto TFM: Supervisor de Cargas (AVR + RS-485 + Modbus RTU + MPU6050)
+// Proyecto TFM: Supervisor de Cargas (Arduino + RS-485 + Modbus RTU + MPU6050)
 //
 // Convenciones generales
 // - Direcciones en PDU son base 0 (norma Modbus). Se muestran referencias 3xxxx/4xxxx
 //   a modo humano para identificar bancos Input (3xxxx) y Holding (4xxxx).
 // - Input Registers (función 0x04) son de solo lectura; Holding (0x03/0x06) admiten
 //   lectura y, si procede, escritura (según cada dirección).
-// - Granularidad: 1 registro = 16 bits. Los valores físicos se escalan a enteros
-//   para evitar float en MCU. Ver macros SCALE_*.
-// - Endianness: cada palabra Modbus es big-endian (MSB→LSB). Si en futuro se usan
-//   valores de 32 bits, se deberán componer dos registros contiguos MSW/LSW.
+// - Resolución: 1 registro = 2 bytes -> 16 bits. Los valores físicos se escalan a enteros
+//   para evitar float en MCU.
+// - Cada palabra Modbus es big-endian (MSB→LSB). Si en futuro se usan
+//   valores de 32 bits, se deberán componer dos registros contiguos MSW/LSW y leerlos siempre en bloque.
 //
 // Uso típico desde la capa Modbus:
-// - Para lecturas: el servidor llamará regs_read_input/holding(addr,count,out) con
+// - Para lecturas: (0x04)
+//   el servidor llamará regs_read_input/holding(addr,count,out) con
 //   validación previa de límites. Si retorna false → Excepción Illegal Address.
-// - Para escrituras (0x06): regs_write_holding(addr,value) — true si aceptada;
+// - Para escrituras (0x03/0x06):
+//   regs_write_holding(addr,value) — true si aceptada;
 //   false → Excepción Illegal Data Value/Address según proceda.
 //
 // Contrato de la API regs_*
 // - regs_read_* devuelven true si TODA la ventana solicitada es válida; si cualquiera
 //   de las direcciones cae fuera de rango o no es soportada, devuelven false.
 // - regs_write_holding aplica una escritura de 16 bits y devuelve true si es válida.
-// - Las funciones no bloquean y no realizan I/O de bajo nivel; actúan sobre un estado
+// - Las funciones no bloquean, actúan sobre un estado
 //   en RAM que debe ser mantenido por capas superiores (ej. sensores, lógica).
 // -----------------------------------------------------------------------------
 #pragma once
@@ -99,13 +101,41 @@ extern "C" {
 #define HR_DIAG_TRAMAS_TX_OK     0x0023  // 40036 R  tramas TX OK
 #define HR_DIAG_DESBORDES_UART   0x0024  // 40037 R  UART overruns
 #define HR_DIAG_ULTIMA_EXCEPCION 0x0025  // 40038 R  último código de excepción
+
+// -----------------------------
+// BLOQUE 5: Identidad extendida (Holding 4xxxx, sólo lectura)
+// - Cadenas ASCII empaquetadas 2B por registro (MSB,LSB)
+// - Longitud en bytes en *_LEN (0..8). Datos en *_STR0..*_STR3 (4 regs = 8 bytes)
+// - Compatibilidad: HR_INFO_VENDOR_ID/PRODUCTO_ID siguen existiendo (2B)
+// -----------------------------
+#define HR_INFO_VENDOR_STR_LEN   0x0026  // 40039 R  bytes válidos en vendor (0..8)
+#define HR_INFO_VENDOR_STR0      0x0027  // 40040 R  vendor bytes[0..1]
+#define HR_INFO_VENDOR_STR1      0x0028  // 40041 R  vendor bytes[2..3]
+#define HR_INFO_VENDOR_STR2      0x0029  // 40042 R  vendor bytes[4..5]
+#define HR_INFO_VENDOR_STR3      0x002A  // 40043 R  vendor bytes[6..7]
+#define HR_INFO_PRODUCT_STR_LEN  0x002B  // 40044 R  bytes válidos en product (0..8)
+#define HR_INFO_PRODUCT_STR0     0x002C  // 40045 R  product bytes[0..1]
+#define HR_INFO_PRODUCT_STR1     0x002D  // 40046 R  product bytes[2..3]
+#define HR_INFO_PRODUCT_STR2     0x002E  // 40047 R  product bytes[4..5]
+#define HR_INFO_PRODUCT_STR3     0x002F  // 40048 R  product bytes[6..7]
+
 #define HR_DIAG_RESERVED_END     0x002F  // reserva
+
+// -----------------------------
+// BLOQUE 6: Alias de dispositivo (Holding 4xxxx, sólo lectura)
+// - Alias ASCII (0..64 bytes) empaquetado 2B por registro (MSB,LSB)
+// - Longitud en bytes en HR_ID_ALIAS_LEN (0..64)
+// - Datos en HR_ID_ALIAS0..HR_ID_ALIAS31 (32 regs = 64 bytes)
+// -----------------------------
+#define HR_ID_ALIAS_LEN          0x0030  // 40049 R  bytes válidos en alias (0..64)
+#define HR_ID_ALIAS0             0x0031  // 40050 R  alias bytes[0..1] (base)
+// Rango de datos: 0x0031..0x0050 (32 registros)
 
 // -----------------------------
 // Límites de mapa (para validación rápida) — ambos extremos incluidos
 // -----------------------------
 #define HR_MIN_ADDR  0x0000
-#define HR_MAX_ADDR  0x002F
+#define HR_MAX_ADDR  0x0050
 #define IR_MIN_ADDR  0x0000
 #define IR_MAX_ADDR  0x001F
 
@@ -155,6 +185,8 @@ bool regs_read_input (uint16_t addr, uint16_t count, uint16_t* out);
 bool regs_read_holding(uint16_t addr, uint16_t count, uint16_t* out);
 
 // Escrituras
+// Secuencia de escrituras en HR_CMD_IDENT_SEGUNDOS para detectar eventos
+uint16_t regs_get_ident_write_seq();
 
 // 0x06 (single): Escribe un registro Holding en 'addr' con 'value'. Validaciones:
 //  - HR_CFG_BAUDIOS: 0..4 (códigos de baudios)
@@ -163,6 +195,11 @@ bool regs_read_holding(uint16_t addr, uint16_t count, uint16_t* out);
 //  - HR_CMD_IDENT_SEGUNDOS: cualquier valor (0=stop)
 //  - HR_CMD_GUARDAR_APLICAR: 0xA55A ó 0xB007
 bool regs_write_holding(uint16_t addr, uint16_t value);
+
+// 0x10 (multiple): Escribe 'count' registros Holding consecutivos a partir de 'addr'.
+// Devuelve true si todas las escrituras son válidas. Puede aplicar lógica especial
+// para bloques (p.ej., alias: HR_ID_ALIAS_LEN + datos empaquetados).
+bool regs_write_multi(uint16_t addr, uint16_t count, const uint16_t* values);
 
 // Hooks para que otras capas (sensores/lógica) actualicen valores en tiempo real
 // Ángulos X/Y en décimas de grado (mdeg)

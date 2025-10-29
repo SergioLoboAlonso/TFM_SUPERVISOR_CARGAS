@@ -22,9 +22,21 @@
 #endif
 
 // Revisión de hardware (si cambia PCB o cableado)
+// Mantener compatibilidad con HW_REV existente y, opcionalmente, habilitar semántica mayor.menor.parche
 #ifndef HW_REV
   // Se coordina con la etiqueta serigrafiada en la placa para facilitar depuración en campo.
-  #define HW_REV 1 // Revisión de hardware
+  #define HW_REV 1 // Revisión de hardware (valor mayor por compatibilidad)
+#endif
+
+// Versión de hardware (opcional, mayor.menor.parche)
+#ifndef HW_VERSION_MAJOR
+  #define HW_VERSION_MAJOR (HW_REV) // Por defecto, usar HW_REV como mayor
+#endif
+#ifndef HW_VERSION_MINOR
+  #define HW_VERSION_MINOR 0
+#endif
+#ifndef HW_VERSION_PATCH
+  #define HW_VERSION_PATCH 0
 #endif
 
 // (Opcional) fecha de build fija; puede automatizarse con extra_scripts de PlatformIO
@@ -38,11 +50,11 @@
   #define VENDOR_NAME "LOBO-IoT" // Fabricante
 #endif
 #ifndef MODEL_NAME
-  #define MODEL_NAME  "SupervisorCargas_TX" // Modelo
+  #define MODEL_NAME  "Inclino_TX" // Modelo
 #endif
 
-// Cadena formateada para impresión, p. ej.: "v1.0.0 (HW1) 2025-10-24"
-#define FW_VERSION_STR  "v" STR(FW_VERSION_GLOBAL) "." STR(FW_VERSION_MINOR) "." STR(FW_VERSION_PATCH) " (HW" STR(HW_REV) ") " FW_BUILD_DATE // Cadena de versión formateada
+// Cadena formateada para impresión, p. ej.: "v1.0.0 (HW1.0.0) 2025-10-24"
+#define FW_VERSION_STR  "v" STR(FW_VERSION_GLOBAL) "." STR(FW_VERSION_MINOR) "." STR(FW_VERSION_PATCH) " (HW" STR(HW_VERSION_MAJOR) "." STR(HW_VERSION_MINOR) "." STR(HW_VERSION_PATCH) ") " FW_BUILD_DATE // Cadena de versión formateada
 
 // Macros de ayuda para conversión a texto (stringify)
 #define STR_HELPER(x) #x // Macro auxiliar para convertir a cadena

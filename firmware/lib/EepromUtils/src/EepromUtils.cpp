@@ -6,7 +6,7 @@
 // -----------------------------------------------------------------------------
 
 #include "EepromUtils.h"
-#include <EEPROM.h>
+#include <avr/eeprom.h>
 
 namespace {
 	// Layout simple en EEPROM (bytes):
@@ -30,19 +30,19 @@ namespace {
 	const int OFF_ALIAS    = 0x0C; // Offset base alias (hasta 64B)
 
 	bool headerValid() {
-		return (EEPROM.read(OFF_MAGIC0) == MAGIC0) && (EEPROM.read(OFF_MAGIC1) == MAGIC1) && (EEPROM.read(OFF_VERSION) == VERSION);
+		return (eeprom_read_byte((uint8_t*)OFF_MAGIC0) == MAGIC0) && (eeprom_read_byte((uint8_t*)OFF_MAGIC1) == MAGIC1) && (eeprom_read_byte((uint8_t*)OFF_VERSION) == VERSION);
 	}
 
 	void ensureHeader() {
 		if (!headerValid()) {
-			EEPROM.update(OFF_MAGIC0, MAGIC0);
-			EEPROM.update(OFF_MAGIC1, MAGIC1);
-			EEPROM.update(OFF_VERSION, VERSION);
+			eeprom_update_byte((uint8_t*)OFF_MAGIC0, MAGIC0);
+			eeprom_update_byte((uint8_t*)OFF_MAGIC1, MAGIC1);
+			eeprom_update_byte((uint8_t*)OFF_VERSION, VERSION);
 			// Default values
-			EEPROM.put(OFF_UNITID, static_cast<uint16_t>(0));
-			EEPROM.put(OFF_SERIAL, static_cast<uint32_t>(0));
-			EEPROM.put(OFF_ALIASLEN, static_cast<uint16_t>(0));
-			for (int i = 0; i < 64; ++i) EEPROM.update(OFF_ALIAS + i, 0); // Limpia zona de alias
+			eeprom_update_word((uint16_t*)OFF_UNITID, (uint16_t)0);
+			eeprom_update_dword((uint32_t*)OFF_SERIAL, (uint32_t)0);
+			eeprom_update_word((uint16_t*)OFF_ALIASLEN, (uint16_t)0);
+			for (int i = 0; i < 64; ++i) eeprom_update_byte((uint8_t*)(OFF_ALIAS + i), 0); // Limpia zona de alias
 		}
 	}
 }
@@ -56,36 +56,51 @@ void begin() {
 
 uint16_t readUnitId() {
 	if (!headerValid()) return 0;
-		uint16_t v = 0;                   // Valor por defecto si no escrito
-	EEPROM.get(OFF_UNITID, v);
+		uint16_t v = eeprom_read_word((uint16_t*)OFF_UNITID);
 	return v;
 }
 
 void writeUnitId(uint16_t uid) {
 	ensureHeader();
-	EEPROM.put(OFF_UNITID, uid);
+	eeprom_update_word((uint16_t*)OFF_UNITID, uid);
 }
 
 uint32_t readSerial() {
 	if (!headerValid()) return 0;
-		uint32_t s = 0;                   // Valor por defecto si no escrito
-	EEPROM.get(OFF_SERIAL, s);
+		uint32_t s = eeprom_read_dword((uint32_t*)OFF_SERIAL);
 	return s;
 }
 
 void writeSerial(uint32_t serial) {
 	ensureHeader();
-	EEPROM.put(OFF_SERIAL, serial);
+	eeprom_update_dword((uint32_t*)OFF_SERIAL, serial);
 }
 
 void readAlias(char* out, uint16_t& len) {
 	if (!out) return;
-	if (!headerValid()) { len = 0; out[0] = '\0'; return; }
-		uint16_t l = 0;                   // Longitud leída de alias (acotada a 64)
-	EEPROM.get(OFF_ALIASLEN, l);
+	if (!headerValid()) {
+		// Si no hay cabecera válida aún, expone alias por defecto en memoria
+		const char* def = "default";
+		uint16_t i = 0;
+		while (def[i] && i < 64) { out[i] = def[i]; i++; }
+		out[i] = '\0';
+		len = i;
+		return;
+	}
+	// Longitud leída de alias (acotada a 64)
+	uint16_t l = eeprom_read_word((uint16_t*)OFF_ALIASLEN);
 	if (l > 64) l = 64;
+	if (l == 0) {
+		// Si no está provisionado, devuelve alias por defecto sin escribir en EEPROM
+		const char* def = "default";
+		uint16_t i = 0;
+		while (def[i] && i < 64) { out[i] = def[i]; i++; }
+		out[i] = '\0';
+		len = i;
+		return;
+	}
 	for (uint16_t i = 0; i < l; ++i) {
-		out[i] = static_cast<char>(EEPROM.read(OFF_ALIAS + i));
+		out[i] = static_cast<char>(eeprom_read_byte((uint8_t*)(OFF_ALIAS + i)));
 	}
 	out[l] = '\0';
 	len = l;
@@ -93,14 +108,14 @@ void readAlias(char* out, uint16_t& len) {
 
 void writeAlias(const char* in, uint16_t len) {
 	ensureHeader();
-	if (!in) { EEPROM.put(OFF_ALIASLEN, static_cast<uint16_t>(0)); return; }
+	if (!in) { eeprom_update_word((uint16_t*)OFF_ALIASLEN, (uint16_t)0); return; }
 	uint16_t l = len > 64 ? 64 : len;
-	EEPROM.put(OFF_ALIASLEN, l);
+	eeprom_update_word((uint16_t*)OFF_ALIASLEN, l);
 	for (uint16_t i = 0; i < l; ++i) {
-		EEPROM.update(OFF_ALIAS + i, static_cast<uint8_t>(in[i]));
+		eeprom_update_byte((uint8_t*)(OFF_ALIAS + i), (uint8_t)in[i]);
 	}
 	for (uint16_t i = l; i < 64; ++i) {
-		EEPROM.update(OFF_ALIAS + i, 0);
+		eeprom_update_byte((uint8_t*)(OFF_ALIAS + i), 0);
 	}
 }
 

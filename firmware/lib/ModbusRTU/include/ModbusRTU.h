@@ -74,6 +74,8 @@ private:
   void handleReadHolding(uint8_t unit, uint16_t start, uint16_t count, bool isInput); // 0x03/0x04
   // Escribe un único Holding (0x06). En broadcast aplica y no responde.
   void handleWriteSingle(uint8_t unit, uint16_t reg, uint16_t value, bool isBroadcast); // 0x06
+  // Escribe múltiples Holding (0x10). En broadcast aplica y no responde.
+  void handleWriteMultiple(uint8_t unit, uint16_t start, uint16_t count, const uint16_t* values, bool isBroadcast); // 0x10
   // Report Slave ID (0x11): devuelve cadena de identificación (vendor, modelo, fw)
   void handleReportSlaveId(uint8_t unit); // 0x11
   // Identify + Info (0x41): dispara Identify y devuelve la misma información que 0x11

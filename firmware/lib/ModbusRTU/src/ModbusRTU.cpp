@@ -143,6 +143,25 @@ void ModbusRTU::handleWriteSingle(uint8_t unit, uint16_t reg, uint16_t value, bo
   sendResponse(resp, sizeof(resp));
 }
 
+void ModbusRTU::handleWriteMultiple(uint8_t unit, uint16_t start, uint16_t count, const uint16_t* values, bool isBroadcast){
+  bool ok = false;
+  if(values && count>0){
+    ok = regs_write_multi(start, count, values);
+  }
+  if(isBroadcast){
+    // No responder por norma en broadcast
+    return;
+  }
+  if(!ok){ sendException(unit, 0x10, MB_EX_ILLEGAL_DATA_ADDRESS); return; }
+  // Respuesta estándar: eco de start y count
+  uint8_t resp[6];
+  resp[0] = unit;
+  resp[1] = 0x10;
+  put_u16_be(&resp[2], start);
+  put_u16_be(&resp[4], count);
+  sendResponse(resp, sizeof(resp));
+}
+
 // ---------- Parser de petición ----------
 void ModbusRTU::handleRequest(const uint8_t* p, uint8_t n){
   // Mínimo absoluto para RTU: unit(1) + func(1) + CRC(2) = 4 bytes
@@ -187,15 +206,37 @@ void ModbusRTU::handleRequest(const uint8_t* p, uint8_t n){
       handleWriteSingle(unit, reg, value, isBroadcast);
       break;
     }
+    case 0x10: { // Write Multiple Registers
+      // unit, func, startHi, startLo, cntHi, cntLo, byteCount, data..., crcLo, crcHi
+      if(n < 9){ sendException(unit, func, MB_EX_ILLEGAL_DATA_VALUE); return; }
+      uint16_t start = u16_be(&p[2]);
+      uint16_t count = u16_be(&p[4]);
+      uint8_t  bc    = p[6];
+      if(count==0 || bc != (uint8_t)(count*2) || n != (uint8_t)(9 + bc)){
+        sendException(unit, func, MB_EX_ILLEGAL_DATA_VALUE); return;
+      }
+      // Convertir bytes big-endian a words
+      uint16_t vals[64];
+      if(count > 64){ sendException(unit, func, MB_EX_ILLEGAL_DATA_VALUE); return; }
+      for(uint16_t i=0;i<count;i++){
+        vals[i] = (uint16_t(p[7 + 2*i])<<8) | p[7 + 2*i + 1];
+      }
+      handleWriteMultiple(unit, start, count, vals, isBroadcast);
+      break;
+    }
     case 0x11: { // Report Slave ID (Identify)
       // Petición sin datos: unit, func, crcLo, crcHi
       if(n < 4){ sendException(unit, func, MB_EX_ILLEGAL_DATA_VALUE); return; }
+      // No responder a broadcast (descubrimiento silencioso)
+      if(isBroadcast) return;
       handleReportSlaveId(unit); // Sólo información; sin trigger
       break;
     }
     case 0x41: { // Proprietary Identify + Info
       // Petición sin datos: unit, func, crcLo, crcHi
       if(n < 4){ sendException(unit, func, MB_EX_ILLEGAL_DATA_VALUE); return; }
+      // No responder a broadcast
+      if(isBroadcast) return;
       handleIdentifyBlinkAndInfo(unit);
       break;
     }
@@ -250,7 +291,7 @@ void ModbusRTU::handleReportSlaveId(uint8_t unit){
   resp[1] = 0x11;
   // [2] = byteCount (rellenar después)
   uint8_t idx = 3;
-  resp[idx++] = UNIT_ID;      // slaveId
+  resp[idx++] = unit;         // slaveId (eco de la unidad direccionada)
   resp[idx++] = 0xFF;         // runIndicator (0xFF = en marcha)
   // Copiar ascii
   const uint8_t maxAscii = (uint8_t)(sizeof(resp) - idx - 2); // reserva para CRC en capa sendResponse
@@ -276,7 +317,7 @@ void ModbusRTU::handleIdentifyBlinkAndInfo(uint8_t unit){
   resp[0] = unit;
   resp[1] = 0x41; // función propietaria
   uint8_t idx = 3;
-  resp[idx++] = UNIT_ID;      // slaveId
+  resp[idx++] = unit;         // slaveId (eco de la unidad direccionada)
   resp[idx++] = 0xFF;         // runIndicator
   const uint8_t maxAscii = (uint8_t)(sizeof(resp) - idx - 2);
     if(asciiLen > maxAscii) asciiLen = maxAscii;

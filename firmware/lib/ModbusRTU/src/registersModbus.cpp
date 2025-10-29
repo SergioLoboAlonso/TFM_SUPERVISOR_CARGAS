@@ -14,6 +14,7 @@
 #include "registersModbus.h"
 #include <string.h>
 #include "firmware_version.h" // Unifica versión HW/FW desde cabecera común
+#include <EepromUtils.h>       // Lectura de UnitID/Serial/Alias persistentes
 
 // -----------------------------
 // Defaults de compilación
@@ -21,7 +22,7 @@
 // Estas macros pueden inyectarse desde platformio.ini (build_flags) para personalizar
 // UnitID y versiones HW/FW en tiempo de compilación.
 #ifndef UNIT_ID
-  #define UNIT_ID 1      // Unit ID por defecto (1..247)
+  #define UNIT_ID 247      // Unit ID por defecto (1..247)
 #endif
 // Versionado ahora proviene de firmware_version.h (FW_VERSION_*, HW_REV)
 
@@ -32,10 +33,10 @@
 // Las unidades/formatos siguen el contrato de registersModbus.h
 static struct {
   // Info
-  uint16_t vendor_id   = 0x5446;                 // 'T''F'
-  uint16_t product_id  = 0x4D30;                 // 'M''0'
-  uint16_t hw_version  = (uint16_t)((HW_REV & 0xFF) << 8) | 0x00;                         // HW: mayor=HW_REV, menor=0
-  uint16_t fw_version  = (uint16_t)((FW_VERSION_GLOBAL & 0xFF) << 8) | (FW_VERSION_MINOR & 0xFF); // FW: mayor/menor
+  uint16_t vendor_id   = 0x5446;                 // por compatibilidad: 'T''F' (no ASCII si se fija distinto)
+  uint16_t product_id  = 0x4D30;                 // por compatibilidad: 'M''0'
+  uint16_t hw_version  = (uint16_t)(((HW_VERSION_MAJOR) & 0xFF) << 8) | ((HW_VERSION_MINOR) & 0xFF); // HW: mayor.menor (parche se expone en Identify)
+  uint16_t fw_version  = (uint16_t)((FW_VERSION_GLOBAL & 0xFF) << 8) | (FW_VERSION_MINOR & 0xFF); // FW: mayor/menor (parche via Identify)
   uint16_t unit_id     = UNIT_ID;                // Unit ID efectivo
   uint16_t caps        = (DEV_CAP_RS485|DEV_CAP_MPU6050|DEV_CAP_IDENT); // Capacidades
   uint16_t status      = DEV_STATUS_OK;          // Flags de estado
@@ -46,6 +47,7 @@ static struct {
   uint16_t mpu_lpf_hz  = 42;                     // ejemplo codificado
   uint16_t save_apply  = 0;                      // Último comando de guardar/aplicar
   uint16_t ident_secs  = 0;                      // Timeout de identify (segundos)
+  uint16_t ident_write_seq = 0;                  // Secuencia de escrituras en HR_CMD_IDENT_SEGUNDOS
 
   // Medidas
   int16_t  ang_x_mdeg  = 0;
@@ -66,10 +68,32 @@ static struct {
   uint16_t tx_frames   = 0;                      // Tramas TX OK
   uint16_t overruns    = 0;                      // Desbordes UART
   uint16_t last_excpt  = 0;                      // Último código de excepción
+  // Alias (cargado bajo demanda desde EEPROM)
+  uint16_t alias_len   = 0;                      // Longitud de alias (0..64)
+  char     alias_buf[65] = {0};                  // Alias NUL
+  bool     alias_loaded = false;                 // Flag de carga diferida
 } R;
+// Ayudas para empaquetar cadenas en registros (2 bytes por registro)
+static inline uint8_t str_len_cap8(const char* s){
+  uint8_t n=0;
+  while(s && *s && n<8){ n++; s++; } 
+  return n;
+}
+static inline uint16_t pack_word2(const char* s, uint8_t idx){
+  // idx es el índice de registro (0..3); cada registro contiene dos bytes [2*idx] y [2*idx+1]
+  uint8_t b0 = 0, b1 = 0;
+  uint8_t pos = (uint8_t)(idx*2);
+  if (s){
+    uint8_t i=0; while(i<pos && *s){ s++; i++; }
+    b0 = (uint8_t)(*s ? *s : 0);
+    if (*s) s++;
+    b1 = (uint8_t)(*s ? *s : 0);
+  }
+  return (uint16_t)((b0<<8) | b1);
+}
 
 // -----------------------------
-// Helpers
+// Utilidades internas
 // -----------------------------
 static inline uint16_t uptime_lo() {
   return (uint16_t)((millis()/1000UL) & 0xFFFF);
@@ -77,7 +101,8 @@ static inline uint16_t uptime_lo() {
 static inline uint16_t uptime_hi() {
   return (uint16_t)(((millis()/1000UL) >> 16) & 0xFFFF);
 }
-// Comprueba si [addr, addr+count-1] cae dentro de [min_a, max_a]
+// Comprueba si [addr, addr+count-1] cae dentro de [min_a, max_a] 
+//(evitar que te pidan la direccion de utlimo registro y otras 4, cae fuera de array)
 static inline bool in_range(uint16_t addr, uint16_t min_a, uint16_t max_a, uint16_t count){
   if (addr < min_a) return false;
   if (addr > max_a) return false;
@@ -85,26 +110,68 @@ static inline bool in_range(uint16_t addr, uint16_t min_a, uint16_t max_a, uint1
   return true;
 }
 
+// Carga del alias desde EEPROM (o valor por defecto si no provisionado)
+static inline void ensure_alias_loaded(){
+  if (!R.alias_loaded){
+    EepromUtils::begin();
+    uint16_t l = 0;
+    EepromUtils::readAlias(R.alias_buf, l);
+    if (l > 64) l = 64;
+    R.alias_len = l;
+    R.alias_loaded = true;
+  }
+}
+
 // -----------------------------
-// Init
+// Inizialización de estados manualmente
 // -----------------------------
+/**
+ * @brief Inicializa el estado de los registros Modbus
+ * 
+ * Limpia estados transitorios y flags de error. Mantiene los valores
+ * de vendor, product y versiones. Fuerza la recarga del alias desde EEPROM
+ * en la próxima lectura.
+ * 
+ * @note Debe llamarse durante la inicialización del sistema
+ */
 void regs_init(void){
   // Limpia estados transitorios si aplica; mantiene vendor/product/versiones
   R.status = (DEV_STATUS_OK);
   R.errors = DEV_ERR_NONE;
+  R.alias_loaded = false; // forzar recarga de alias en próxima lectura
 }
 
 // -----------------------------
 // Lecturas
 // -----------------------------
+/**
+ * @brief Lee registros de entrada (Input Registers) del dispositivo Modbus
+ * 
+ * Esta función lee un número especificado de registros de entrada consecutivos
+ * (función 0x04) que contienen datos de telemetría en tiempo real (ángulos,
+ * temperatura, aceleración, giroscopio, etc.).
+ * 
+ * @param addr Dirección inicial de los registros de entrada a leer
+ * @param count Número de registros de entrada consecutivos a leer
+ * @param out Puntero al búfer donde se almacenarán los valores leídos.
+ *            El búfer debe ser suficientemente grande para contener 'count' valores uint16_t.
+ * 
+ * @return true si la operación de lectura fue exitosa
+ * @return false si la operación falló (dirección inválida, count fuera de rango, etc.)
+ * 
+ * @note Los registros de entrada son de solo lectura y contienen datos medidos
+ * @note El rango válido es IR_MIN_ADDR a IR_MAX_ADDR
+ * @note count debe estar entre 1 y MAX_INPUT_READ
+ */
 // 0x04 — Input Registers: sólo lectura
-bool regs_read_input(uint16_t addr, uint16_t count, uint16_t* out){
-  if (count==0 || count>MAX_INPUT_READ) return false;
-  if (!in_range(addr, IR_MIN_ADDR, IR_MAX_ADDR, count)) return false;
+bool regs_read_input(uint16_t addr, uint16_t count, uint16_t* out){//addr dirección, count cantidad de registros, out es hexa concat fomateado
+
+  if (count==0 || count>MAX_INPUT_READ) return false; // evitar 0 medidas y peticiones largas
+  if (!in_range(addr, IR_MIN_ADDR, IR_MAX_ADDR, count)) return false;//Evitar rangos invalidos
 
   for (uint16_t i=0;i<count;i++){
     uint16_t a = addr + i;
-    switch(a){
+    switch(a){//En caso de añadir nuevos registros debe hacerse en el orden de registers.h
       case IR_MED_ANGULO_X_CDEG:    out[i] = (uint16_t)R.ang_x_mdeg; break;
       case IR_MED_ANGULO_Y_CDEG:    out[i] = (uint16_t)R.ang_y_mdeg; break;
       case IR_MED_TEMPERATURA_CENTI:out[i] = (uint16_t)R.temp_mc;    break;
@@ -123,21 +190,21 @@ bool regs_read_input(uint16_t addr, uint16_t count, uint16_t* out){
   return true;
 }
 /**
- * @brief Reads holding registers from the Modbus device
+ * @brief Lee registros holding del dispositivo Modbus
  * 
- * This function reads a specified number of consecutive holding registers
- * starting from the given address and stores the values in the output buffer.
+ * Esta función lee un número especificado de registros holding consecutivos
+ * comenzando desde la dirección dada y almacena los valores en el búfer de salida.
  * 
- * @param addr Starting address of the holding registers to read
- * @param count Number of consecutive holding registers to read
- * @param out Pointer to buffer where the read register values will be stored.
- *            Buffer must be large enough to hold 'count' uint16_t values.
+ * @param addr Dirección inicial de los registros holding a leer
+ * @param count Número de registros holding consecutivos a leer
+ * @param out Puntero al búfer donde se almacenarán los valores de registros leídos.
+ *            El búfer debe ser suficientemente grande para contener 'count' valores uint16_t.
  * 
- * @return true if the read operation was successful
- * @return false if the read operation failed (invalid address, communication error, etc.)
+ * @return true si la operación de lectura fue exitosa
+ * @return false si la operación de lectura falló (dirección inválida, error de comunicación, etc.)
  * 
- * @note The caller is responsible for ensuring the output buffer has sufficient space
- * @note Address range and count validity should be verified before calling this function
+ * @note El  es responsable de asegurar que el búfer de salida tenga espacio suficiente
+ * @note El rango de direcciones y la validez del count deben verificarse antes de llamar esta función
  */
 // 0x03 — Holding Registers: info, config y diagnóstico
 bool regs_read_holding(uint16_t addr, uint16_t count, uint16_t* out){
@@ -159,6 +226,21 @@ bool regs_read_holding(uint16_t addr, uint16_t count, uint16_t* out){
   case HR_INFO_ESTADO:         out[i] = R.status;      break;
   case HR_INFO_ERRORES:        out[i] = R.errors;      break;
 
+      // Identidad extendida (vendor/product ASCII, 0..8 bytes)
+  case HR_INFO_VENDOR_STR_LEN:  out[i] = str_len_cap8(VENDOR_NAME); break;
+  case HR_INFO_VENDOR_STR0:     out[i] = pack_word2(VENDOR_NAME, 0); break;
+  case HR_INFO_VENDOR_STR1:     out[i] = pack_word2(VENDOR_NAME, 1); break;
+  case HR_INFO_VENDOR_STR2:     out[i] = pack_word2(VENDOR_NAME, 2); break;
+  case HR_INFO_VENDOR_STR3:     out[i] = pack_word2(VENDOR_NAME, 3); break;
+  case HR_INFO_PRODUCT_STR_LEN: out[i] = str_len_cap8(MODEL_NAME); break;
+  case HR_INFO_PRODUCT_STR0:    out[i] = pack_word2(MODEL_NAME, 0); break;
+  case HR_INFO_PRODUCT_STR1:    out[i] = pack_word2(MODEL_NAME, 1); break;
+  case HR_INFO_PRODUCT_STR2:    out[i] = pack_word2(MODEL_NAME, 2); break;
+  case HR_INFO_PRODUCT_STR3:    out[i] = pack_word2(MODEL_NAME, 3); break;
+
+    // Alias ASCII (0..64B) — longitud + datos empaquetados 2B/reg
+  case HR_ID_ALIAS_LEN:         ensure_alias_loaded(); out[i] = R.alias_len; break;
+
       // Config
   case HR_CFG_BAUDIOS:         out[i] = R.baud_code;  break;
   case HR_CFG_MPU_FILTRO_HZ:   out[i] = R.mpu_lpf_hz; break;
@@ -174,7 +256,15 @@ bool regs_read_holding(uint16_t addr, uint16_t count, uint16_t* out){
   case HR_DIAG_DESBORDES_UART:   out[i] = R.overruns;   break;
   case HR_DIAG_ULTIMA_EXCEPCION: out[i] = R.last_excpt; break;
 
-      default: out[i] = 0; break; // reservas → 0
+  default:
+      // Rango de alias: HR_ID_ALIAS0..HR_ID_ALIAS0+31 (32 registros)
+      if (a >= HR_ID_ALIAS0 && a <= (uint16_t)(HR_ID_ALIAS0 + 31)){
+        ensure_alias_loaded();
+        uint16_t idx = (uint16_t)(a - HR_ID_ALIAS0);
+        out[i] = pack_word2(R.alias_buf, (uint8_t)idx);
+        break;
+      }
+      out[i] = 0; break; // reservas → 0
     }
   }
   return true;
@@ -183,6 +273,22 @@ bool regs_read_holding(uint16_t addr, uint16_t count, uint16_t* out){
 // -----------------------------
 // Escrituras (0x06 single)
 // -----------------------------
+/**
+ * @brief Escribe un único registro holding (función Modbus 0x06)
+ * 
+ * Valida el rango de direcciones y los valores permitidos antes de realizar
+ * la escritura. Registros de solo lectura y valores fuera de rango son rechazados.
+ * 
+ * @param addr Dirección del registro holding a escribir
+ * @param value Valor de 16 bits a escribir en el registro
+ * 
+ * @return true si la escritura fue aceptada y el valor es válido
+ * @return false si la escritura fue rechazada (registro R/O, valor fuera de rango, etc.)
+ * 
+ * @note Actualiza R.errors con DEV_ERR_RANGE si el valor está fuera de rango
+ * @note Algunos registros marcan DEV_STATUS_CFG_DIRTY al escribirse
+ * @note El alias debe escribirse con función 0x10 (escritura múltiple) para garantizar atomicidad
+ */
 // 0x06 — Escritura single register (Holding). Valida rango/valor.
 bool regs_write_holding(uint16_t addr, uint16_t value){
   switch(addr){
@@ -202,6 +308,7 @@ bool regs_write_holding(uint16_t addr, uint16_t value){
 
   case HR_CMD_IDENT_SEGUNDOS:
     R.ident_secs = value;  // la capa superior iniciará/parará el patrón BlinkIdent
+    R.ident_write_seq++;   // marca evento de escritura (re-trigger incluso si valor igual)
       return true;
 
   case HR_CMD_GUARDAR_APLICAR:
@@ -211,23 +318,144 @@ bool regs_write_holding(uint16_t addr, uint16_t value){
 
     default:
       // R/O o fuera de rango
+      // Alias debe escribirse de forma atómica con 0x10 empezando en HR_ID_ALIAS_LEN
+      // Rechazar 0x06 sobre HR_ID_ALIAS_LEN o HR_ID_ALIAS0..31 para evitar alias parciales
+      if (addr == HR_ID_ALIAS_LEN) { R.errors |= DEV_ERR_RANGE; return false; }
+      if (addr >= HR_ID_ALIAS0 && addr <= (uint16_t)(HR_ID_ALIAS0 + 31)) { R.errors |= DEV_ERR_RANGE; return false; }
       R.errors |= DEV_ERR_RANGE;
       return false;
   }
 }
 
+/**
+ * @brief Escribe múltiples registros holding consecutivos (función Modbus 0x10)
+ * 
+ * Implementa la escritura de bloques de registros. Tiene manejo especial para
+ * el alias del dispositivo, que debe escribirse de forma atómica comenzando en
+ * HR_ID_ALIAS_LEN. Para otros registros, delega a regs_write_holding().
+ * 
+ * @param addr Dirección inicial de los registros holding a escribir
+ * @param count Número de registros consecutivos a escribir
+ * @param values Puntero al array de valores a escribir (count elementos)
+ * 
+ * @return true si todas las escrituras fueron exitosas
+ * @return false si alguna escritura falló o los parámetros son inválidos
+ * 
+ * @note Para el alias: values[0] = longitud (0..64), values[1..N] = datos ASCII empaquetados (2 bytes/registro)
+ * @note La escritura del alias se persiste inmediatamente en EEPROM
+ * @note Para registros normales, itera llamando a regs_write_holding()
+ */
+// 0x10 — Escritura múltiple (bloques)
+bool regs_write_multi(uint16_t addr, uint16_t count, const uint16_t* values){
+  if(count==0 || !values) return false;
+  // Caso especial: alias — escribir longitud + datos empaquetados
+  if(addr == HR_ID_ALIAS_LEN){
+    uint16_t alen = values[0] & 0xFFFF;
+    if(alen > 64) alen = 64;
+    // Bytes disponibles en payload
+    uint16_t avail_bytes = (count>1) ? (uint16_t)((count-1)*2) : 0;
+    if(alen > avail_bytes) alen = avail_bytes;
+    char buf[65];
+    uint16_t bi = 0;
+    for(uint16_t i=0; i< (count>1 ? (count-1) : 0) && bi < 64; ++i){
+      uint16_t w = values[1 + i];
+      uint8_t b0 = (uint8_t)(w >> 8);
+      uint8_t b1 = (uint8_t)(w & 0xFF);
+      if(bi < 64) buf[bi++] = (char)b0;
+      if(bi < 64) buf[bi++] = (char)b1;
+    }
+    if(alen > bi) alen = bi; // no rellenar con basura si faltan bytes
+    // Persistir y actualizar cache
+    EepromUtils::begin();
+    EepromUtils::writeAlias(buf, alen);
+    R.alias_len = alen;
+    memcpy(R.alias_buf, buf, alen);
+    R.alias_buf[alen] = '\0';
+    R.alias_loaded = true;
+    // Limpiar bandera de cfg sucia si se desea marcar guardado inmediato
+    R.status &= ~DEV_STATUS_CFG_DIRTY;
+    return true;
+  }
+  // Por defecto: iterar escritura single
+  for(uint16_t i=0;i<count;i++){
+    if(!regs_write_holding((uint16_t)(addr + i), values[i])){
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * @brief Obtiene el contador de secuencia de escrituras en HR_CMD_IDENT_SEGUNDOS
+ * 
+ * Este contador se incrementa cada vez que se escribe en HR_CMD_IDENT_SEGUNDOS,
+ * incluso si el valor escrito es el mismo. Permite detectar eventos de re-trigger
+ * de identificación LED.
+ * 
+ * @return Valor actual del contador de secuencia de escrituras de identify
+ */
+// Exponer secuencia de escrituras de Identify
+uint16_t regs_get_ident_write_seq(){
+  return R.ident_write_seq;
+}
+
 // -----------------------------
 // Hooks de actualización desde otras capas
 // -----------------------------
+/**
+ * @brief Actualiza los ángulos de inclinación medidos
+ * 
+ * @param ax Ángulo X en décimas de grado (mili-grados)
+ * @param ay Ángulo Y en décimas de grado (mili-grados)
+ * 
+ * @note Marca el flag DEV_STATUS_MPU_READY en el estado del dispositivo
+ */
 void regs_set_angles_mdeg(int16_t ax, int16_t ay){ R.ang_x_mdeg = ax; R.ang_y_mdeg = ay; R.status |= DEV_STATUS_MPU_READY; }
+
+/**
+ * @brief Actualiza la temperatura medida
+ * 
+ * @param mc Temperatura en centésimas de grado Celsius (mili-°C)
+ */
 void regs_set_temp_mc(int16_t mc){ R.temp_mc = mc; }
+
+/**
+ * @brief Actualiza las medidas del acelerómetro
+ * 
+ * @param x Aceleración en eje X en mili-g
+ * @param y Aceleración en eje Y en mili-g
+ * @param z Aceleración en eje Z en mili-g
+ */
 void regs_set_acc_mg(int16_t x, int16_t y, int16_t z){ R.acc_x_mg=x; R.acc_y_mg=y; R.acc_z_mg=z; }
+
+/**
+ * @brief Actualiza las medidas del giroscopio
+ * 
+ * @param x Velocidad angular en eje X en mili-grados por segundo (mdps)
+ * @param y Velocidad angular en eje Y en mili-grados por segundo (mdps)
+ * @param z Velocidad angular en eje Z en mili-grados por segundo (mdps)
+ */
 void regs_set_gyr_mdps(int16_t x, int16_t y, int16_t z){ R.gyr_x_mdps=x; R.gyr_y_mdps=y; R.gyr_z_mdps=z; }
+
+/**
+ * @brief Incrementa el contador de muestras
+ * 
+ * Debe llamarse cada vez que se adquiere una nueva muestra de datos del sensor.
+ * El contador es de 32 bits y se expone como dos registros de 16 bits (LO/HI).
+ */
 void regs_bump_sample_counter(void){ R.sample_cnt++; }
 
 // -----------------------------
 // Diagnóstico y estado
 // -----------------------------
+/**
+ * @brief Incrementa un contador de diagnóstico específico
+ * 
+ * @param reg_addr Dirección del registro de diagnóstico a incrementar
+ *                 (HR_DIAG_TRAMAS_RX_OK, HR_DIAG_RX_CRC_ERROR, etc.)
+ * 
+ * @note Ignora direcciones que no corresponden a contadores de diagnóstico
+ */
 void regs_diag_inc(uint16_t reg_addr){
   switch(reg_addr){
     case HR_DIAG_TRAMAS_RX_OK:   R.rx_frames++;  break;
@@ -238,9 +466,29 @@ void regs_diag_inc(uint16_t reg_addr){
     default: break;
   }
 }
+
+/**
+ * @brief Activa o desactiva flags de estado del dispositivo
+ * 
+ * @param mask Máscara de bits del flag de estado a modificar
+ *             (DEV_STATUS_OK, DEV_STATUS_MPU_READY, DEV_STATUS_CFG_DIRTY, etc.)
+ * @param enable true para activar el flag, false para desactivarlo
+ * 
+ * @note Los flags se exponen en el registro HR_INFO_ESTADO
+ */
 void regs_set_status(uint16_t mask, bool enable){
   if (enable) R.status |= mask; else R.status &= ~mask;
 }
+
+/**
+ * @brief Activa o desactiva flags de error del dispositivo
+ * 
+ * @param mask Máscara de bits del flag de error a modificar
+ *             (DEV_ERR_NONE, DEV_ERR_MPU, DEV_ERR_RANGE, DEV_ERR_COMM, etc.)
+ * @param enable true para activar el flag de error, false para desactivarlo
+ * 
+ * @note Los flags se exponen en el registro HR_INFO_ERRORES
+ */
 void regs_set_error(uint16_t mask, bool enable){
   if (enable) R.errors |= mask; else R.errors &= ~mask;
 }

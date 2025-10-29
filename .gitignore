@@ -3,13 +3,11 @@
 __pycache__/
 *.pyc
 
-# VS Code (permitimos algunos archivos de config)
+# VS Code settings
 .vscode/*
-!.vscode/settings.json
-!.vscode/extensions.json
-!.vscode/launch.json
-!.vscode/README.md
-
+.editorconfig
+# Documentation eliminada por el momento
+docs/
 # Arduino / PlatformIO
 .pio/
 .arduino*
@@ -27,3 +25,4 @@ Thumbs.db
 
 # AI agent instructions (personalización local)
 .github/copilot-instructions.md
+TFM_SUPERVISOR_CARGAS.code-workspace

@@ -7,4 +7,3 @@ Estructura general
 - `infra/` → Infraestructura local (Docker, MQTT, Orion, etc.).
 - `docs/` → Documentación técnica y memoria del TFM.
 - `tests/` → Plan de pruebas y resultados.
-- `.vscode/` → Configuración del entorno de trabajo en VS Code.

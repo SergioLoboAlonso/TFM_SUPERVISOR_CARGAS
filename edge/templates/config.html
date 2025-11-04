@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Configuración - Supervisor de Cargas</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <!-- Navbar Bootstrap -->
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="/">Supervisor Cargas</a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav me-auto mb-2 mb-lg-0">
+                    <li class="nav-item"><a class="nav-link {{ 'active' if request.path.startswith('/diagnostic') else '' }}" href="/diagnostic">Diagnóstico</a></li>
+                    <li class="nav-item"><a class="nav-link {{ 'active' if request.path == '/' else '' }}" href="/">Dashboard</a></li>
+                    <li class="nav-item"><a class="nav-link {{ 'active' if request.path.startswith('/config') else '' }}" href="/config">Configuración</a></li>
+                    <li class="nav-item"><a class="nav-link {{ 'active' if request.path.startswith('/polling') else '' }}" href="/polling">Polling</a></li>
+                </ul>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container mt-4">
+        <!-- Discovery -->
+        <div class="card mb-4">
+            <div class="card-header bg-info text-white">
+                <h5>🔍 Discovery de Red</h5>
+            </div>
+            <div class="card-body">
+                <div class="row align-items-end">
+                    <div class="col-md-2">
+                        <label for="unit-id-min" class="form-label">UnitID Mín:</label>
+                        <input type="number" class="form-control" id="unit-id-min" value="1" min="1" max="247">
+                    </div>
+                    <div class="col-md-2">
+                        <label for="unit-id-max" class="form-label">UnitID Máx:</label>
+                        <input type="number" class="form-control" id="unit-id-max" value="10" min="1" max="247">
+                    </div>
+                    <div class="col-md-3">
+                        <button id="btn-discover" class="btn btn-primary">
+                            <span id="discover-spinner" class="spinner-border spinner-border-sm d-none"></span>
+                            Escanear Red
+                        </button>
+                    </div>
+                    <div class="col-md-5">
+                        <div id="discover-status" class="alert alert-secondary mb-0" role="alert">
+                            Listo para escanear
+                        </div>
+                        <!-- Barra de progreso -->
+                        <div id="discover-progress" class="progress d-none mt-2" style="height: 25px;">
+                            <div id="discover-progress-bar" class="progress-bar progress-bar-striped progress-bar-animated" 
+                                 role="progressbar" style="width: 0%;" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
+                                <span id="discover-progress-text">0%</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Dispositivos Encontrados -->
+        <div class="card">
+            <div class="card-header bg-success text-white">
+                <h5>📋 Dispositivos Encontrados</h5>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-hover">
+                        <thead>
+                            <tr>
+                                <th>UnitID</th>
+                                <th>Vendor</th>
+                                <th>Product</th>
+                                <th>HW</th>
+                                <th>FW</th>
+                                <th>Alias</th>
+                                <th>Estado</th>
+                                <th>Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody id="devices-table-body">
+                            <tr>
+                                <td colspan="8" class="text-center text-muted">
+                                    No hay dispositivos. Ejecuta "Escanear Red" para descubrir.
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <div class="mt-4 text-center">
+            <a href="/" class="btn btn-secondary">⬅️ Volver al Dashboard</a>
+        </div>
+    </div>
+
+    <!-- Modal Identify -->
+    <div class="modal fade" id="identifyModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">🔦 Identificar Dispositivo</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <p>El LED del dispositivo <strong id="identify-unit-id"></strong> parpadeará durante ~5 segundos para su identificación física.</p>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="button" class="btn btn-warning" id="btn-confirm-identify">Identificar</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Info del Dispositivo (después de Identify) -->
+    <div class="modal fade" id="deviceInfoModal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header bg-success text-white">
+                    <h5 class="modal-title">✅ Información del Dispositivo</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="alert alert-success" role="alert">
+                        <strong>LED parpadeando...</strong> El dispositivo está identificándose durante ~5 segundos.
+                    </div>
+                    <h6 class="fw-bold">Información recibida del dispositivo:</h6>
+                    <pre id="device-info-content" class="bg-light p-3 rounded" style="max-height: 400px; overflow-y: auto;"></pre>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-primary" data-bs-dismiss="modal">Cerrar</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast para notificaciones -->
+    <div class="position-fixed bottom-0 end-0 p-3" style="z-index: 11">
+        <div id="toast" class="toast hide" role="alert">
+            <div class="toast-header">
+                <strong class="me-auto">Notificación</strong>
+                <button type="button" class="btn-close" data-bs-dismiss="toast"></button>
+            </div>
+            <div class="toast-body" id="toast-body">
+                Mensaje
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        const toast = new bootstrap.Toast(document.getElementById('toast'));
+
+        function showToast(message, isSuccess = true) {
+            const toastEl = document.getElementById('toast');
+            const toastBody = document.getElementById('toast-body');
+            toastBody.textContent = message;
+            toastEl.className = `toast ${isSuccess ? 'bg-success' : 'bg-danger'} text-white`;
+            toast.show();
+        }
+
+        // Discovery
+        document.getElementById('btn-discover').addEventListener('click', async () => {
+            const minId = parseInt(document.getElementById('unit-id-min').value);
+            const maxId = parseInt(document.getElementById('unit-id-max').value);
+            const btnDiscover = document.getElementById('btn-discover');
+            const spinner = document.getElementById('discover-spinner');
+            const status = document.getElementById('discover-status');
+            const progressContainer = document.getElementById('discover-progress');
+            const progressBar = document.getElementById('discover-progress-bar');
+            const progressText = document.getElementById('discover-progress-text');
+
+            btnDiscover.disabled = true;
+            spinner.classList.remove('d-none');
+            status.className = 'alert alert-info mb-0';
+            status.textContent = `Escaneando UnitID ${minId}..${maxId}...`;
+            
+            // Mostrar barra de progreso
+            progressContainer.classList.remove('d-none');
+            progressBar.style.width = '0%';
+            progressBar.setAttribute('aria-valuenow', '0');
+            progressText.textContent = 'Iniciando...';
+
+            try {
+                // Iniciar discovery (respuesta inmediata)
+                const response = await fetch('/api/discover', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({unit_id_min: minId, unit_id_max: maxId})
+                });
+                const data = await response.json();
+                
+                if (data.status === 'started') {
+                    status.textContent = `Escaneando UnitID ${minId}..${maxId} en tiempo real...`;
+                }
+                // El progreso y la finalización se manejan por WebSocket (ver más abajo)
+            } catch (error) {
+                status.className = 'alert alert-danger mb-0';
+                status.textContent = `Error: ${error.message}`;
+                progressContainer.classList.add('d-none');
+                btnDiscover.disabled = false;
+                spinner.classList.add('d-none');
+            }
+        });
+
+        // Renderizar tabla de dispositivos
+        function renderDevices(devices) {
+            const tbody = document.getElementById('devices-table-body');
+            if (!devices || devices.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted">No se encontraron dispositivos</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = devices.map(dev => `
+                <tr>
+                    <td>
+                        <input type="number" class="form-control form-control-sm unitid-input" 
+                               data-unit-id="${dev.unit_id}" value="${dev.unit_id}" 
+                               min="1" max="247" style="width: 80px;">
+                    </td>
+                    <td>${dev.vendor || '-'}</td>
+                    <td>${dev.product || '-'}</td>
+                    <td>${dev.hw_version || '-'}</td>
+                    <td>${dev.fw_version || '-'}</td>
+                    <td>
+                        <input type="text" class="form-control form-control-sm alias-input" 
+                               data-unit-id="${dev.unit_id}" value="${dev.alias || ''}" 
+                               placeholder="Sin alias">
+                    </td>
+                    <td>
+                        <span class="badge ${dev.status === 'online' ? 'bg-success' : 'bg-secondary'}">
+                            ${dev.status === 'online' ? '🟢 Online' : '🔴 Offline'}
+                        </span>
+                    </td>
+                    <td>
+                        <button class="btn btn-sm btn-warning btn-identify" data-unit-id="${dev.unit_id}" 
+                                title="Identificar (LED parpadea)">
+                            🔦
+                        </button>
+                        <button class="btn btn-sm btn-info btn-change-unitid" data-unit-id="${dev.unit_id}"
+                                title="Cambiar UnitID">
+                            🔢
+                        </button>
+                        <button class="btn btn-sm btn-primary btn-write-alias" data-unit-id="${dev.unit_id}"
+                                title="Escribir Alias (RAM)">
+                            ✏️
+                        </button>
+                        <button class="btn btn-sm btn-success btn-save-eeprom" data-unit-id="${dev.unit_id}"
+                                title="Guardar en EEPROM">
+                            💾
+                        </button>
+                    </td>
+                </tr>
+            `).join('');
+
+            // Event listeners
+            document.querySelectorAll('.btn-identify').forEach(btn => {
+                btn.addEventListener('click', () => openIdentifyModal(btn.dataset.unitId));
+            });
+
+            document.querySelectorAll('.btn-change-unitid').forEach(btn => {
+                btn.addEventListener('click', () => changeUnitId(btn.dataset.unitId));
+            });
+
+            document.querySelectorAll('.btn-write-alias').forEach(btn => {
+                btn.addEventListener('click', () => writeAlias(btn.dataset.unitId));
+            });
+
+            document.querySelectorAll('.btn-save-eeprom').forEach(btn => {
+                btn.addEventListener('click', () => saveToEeprom(btn.dataset.unitId));
+            });
+        }
+
+        // Identify modal
+        let currentIdentifyUnit = null;
+        function openIdentifyModal(unitId) {
+            currentIdentifyUnit = unitId;
+            document.getElementById('identify-unit-id').textContent = unitId;
+            new bootstrap.Modal(document.getElementById('identifyModal')).show();
+        }
+
+        document.getElementById('btn-confirm-identify').addEventListener('click', async () => {
+            try {
+                const response = await fetch(`/api/devices/${currentIdentifyUnit}/identify`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({})
+                });
+                const data = await response.json();
+                
+                // Cerrar modal de confirmación
+                bootstrap.Modal.getInstance(document.getElementById('identifyModal')).hide();
+                
+                // Mostrar información en nuevo modal
+                if (data.info) {
+                    document.getElementById('device-info-content').textContent = data.info;
+                    new bootstrap.Modal(document.getElementById('deviceInfoModal')).show();
+                } else {
+                    showToast(data.message || 'LED identificándose ~5 segundos...', true);
+                }
+            } catch (error) {
+                showToast(`Error: ${error.message}`, false);
+            }
+        });
+
+        // Save alias
+        async function writeAlias(unitId) {
+            const input = document.querySelector(`.alias-input[data-unit-id="${unitId}"]`);
+            const alias = input.value.trim();
+
+            if (!alias) {
+                showToast('El alias no puede estar vacío', false);
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/devices/${unitId}/alias`, {
+                    method: 'PUT',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({alias})
+                });
+                const data = await response.json();
+                if (response.ok) {
+                    showToast(`✅ Alias "${alias}" escrito en RAM del dispositivo ${unitId}`, true);
+                } else {
+                    showToast(data.error || 'Error al escribir alias', false);
+                }
+            } catch (error) {
+                showToast(`Error: ${error.message}`, false);
+            }
+        }
+
+        // Change UnitID
+        async function changeUnitId(currentUnitId) {
+            const input = document.querySelector(`.unitid-input[data-unit-id="${currentUnitId}"]`);
+            const newUnitId = parseInt(input.value);
+
+            if (newUnitId < 1 || newUnitId > 247) {
+                showToast('UnitID debe estar entre 1 y 247', false);
+                return;
+            }
+
+            if (newUnitId === parseInt(currentUnitId)) {
+                showToast('El nuevo UnitID es igual al actual', false);
+                return;
+            }
+
+            if (!confirm(`¿Cambiar UnitID de ${currentUnitId} a ${newUnitId}?\n\nNOTA: Este cambio solo se escribe en RAM. Debes presionar 💾 para persistir en EEPROM.`)) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/devices/${currentUnitId}/unit_id`, {
+                    method: 'PUT',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({new_unit_id: newUnitId})
+                });
+                const data = await response.json();
+                if (response.ok) {
+                    showToast(`✅ UnitID cambiado de ${currentUnitId} a ${newUnitId} (en RAM)`, true);
+                    setTimeout(() => location.reload(), 1500);
+                } else {
+                    showToast(data.error || 'Error al cambiar UnitID', false);
+                }
+            } catch (error) {
+                showToast(`Error: ${error.message}`, false);
+            }
+        }
+
+        // Save to EEPROM
+        async function saveToEeprom(unitId) {
+            if (!confirm(`¿Guardar la configuración actual (UnitID y Alias) del dispositivo ${unitId} en EEPROM?\n\nEsto hará persistente los cambios después de un reset.`)) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/devices/${unitId}/save_eeprom`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'}
+                });
+                const data = await response.json();
+                if (response.ok) {
+                    showToast(`💾 Configuración guardada en EEPROM del dispositivo ${unitId}`, true);
+                } else {
+                    showToast(data.error || 'Error al guardar en EEPROM', false);
+                }
+            } catch (error) {
+                showToast(`Error: ${error.message}`, false);
+            }
+        }
+
+        // Cargar dispositivos al iniciar
+        window.addEventListener('DOMContentLoaded', async () => {
+            try {
+                // Cargar dispositivos
+                const response = await fetch('/api/devices');
+                const devices = await response.json();
+                renderDevices(devices);
+                
+                // Verificar si hay un discovery activo
+                const statusResponse = await fetch('/api/discovery/status');
+                const discoveryState = await statusResponse.json();
+                
+                if (discoveryState.active) {
+                    // Hay un discovery en curso, mostrar UI de progreso
+                    const progressContainer = document.getElementById('discover-progress');
+                    const progressBar = document.getElementById('discover-progress-bar');
+                    const progressText = document.getElementById('discover-progress-text');
+                    const status = document.getElementById('discover-status');
+                    const btnDiscover = document.getElementById('btn-discover');
+                    const spinner = document.getElementById('discover-spinner');
+                    
+                    // Mostrar progreso
+                    progressContainer.classList.remove('d-none');
+                    btnDiscover.disabled = true;
+                    spinner.classList.remove('d-none');
+                    
+                    // Actualizar barra con estado actual
+                    const percentage = discoveryState.total > 0 
+                        ? Math.round((discoveryState.current / discoveryState.total) * 100) 
+                        : 0;
+                    progressBar.style.width = `${percentage}%`;
+                    progressBar.setAttribute('aria-valuenow', percentage);
+                    progressText.textContent = `${percentage}% - UnitID ${discoveryState.unit_id}`;
+                    
+                    status.textContent = `Escaneando UnitID ${discoveryState.unit_id}... (${discoveryState.current}/${discoveryState.total})`;
+                }
+            } catch (error) {
+                console.error('Error al cargar:', error);
+            }
+        });
+    </script>
+    
+    <!-- Socket.IO debe cargarse ANTES de usarlo -->
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    
+    <script>
+        // WebSocket para progreso de discovery en tiempo real
+        const socket = io();
+        
+        socket.on('discovery_progress', (data) => {
+            const progressBar = document.getElementById('discover-progress-bar');
+            const progressText = document.getElementById('discover-progress-text');
+            const status = document.getElementById('discover-status');
+            
+            // Actualizar barra de progreso
+            progressBar.style.width = `${data.percentage}%`;
+            progressBar.setAttribute('aria-valuenow', data.percentage);
+            progressText.textContent = `${data.percentage}% - UnitID ${data.unit_id}`;
+            
+            // Actualizar status
+            status.textContent = `Escaneando UnitID ${data.unit_id}... (${data.current}/${data.total})`;
+        });
+        
+        socket.on('discovery_complete', (data) => {
+            const status = document.getElementById('discover-status');
+            const btnDiscover = document.getElementById('btn-discover');
+            const spinner = document.getElementById('discover-spinner');
+            const progressContainer = document.getElementById('discover-progress');
+            const progressBar = document.getElementById('discover-progress-bar');
+            const progressText = document.getElementById('discover-progress-text');
+            
+            // Completar barra al 100%
+            progressBar.style.width = '100%';
+            progressBar.setAttribute('aria-valuenow', '100');
+            progressText.textContent = '100% - Completado';
+            
+            // Actualizar status
+            status.className = 'alert alert-success mb-0';
+            status.textContent = `✅ Discovery completado: ${data.devices_found} dispositivos encontrados`;
+            
+            // Renderizar dispositivos
+            if (data.devices && data.devices.length > 0) {
+                renderDevices(data.devices);
+            }
+            
+            // Recargar lista de dispositivos
+            fetch('/api/devices')
+                .then(res => res.json())
+                .then(devices => renderDevices(devices));
+            
+            // Ocultar progreso después de 2 segundos
+            setTimeout(() => {
+                progressContainer.classList.add('d-none');
+            }, 2000);
+            
+            // Reactivar botón
+            btnDiscover.disabled = false;
+            spinner.classList.add('d-none');
+        });
+        
+        socket.on('discovery_error', (data) => {
+            const status = document.getElementById('discover-status');
+            const progressContainer = document.getElementById('discover-progress');
+            const btnDiscover = document.getElementById('btn-discover');
+            const spinner = document.getElementById('discover-spinner');
+            
+            status.className = 'alert alert-danger mb-0';
+            status.textContent = `❌ Error: ${data.error}`;
+            progressContainer.classList.add('d-none');
+            
+            // Reactivar botón
+            btnDiscover.disabled = false;
+            spinner.classList.add('d-none');
+        });
+    </script>
+</body>
+</html>

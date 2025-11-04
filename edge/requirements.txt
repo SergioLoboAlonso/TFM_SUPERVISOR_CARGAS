@@ -1,7 +1,23 @@
-pyserial
-paho-mqtt
-pytest
-black
-Flask
-pymodbus==3.6.6
-python-dotenv
+# Core dependencies
+Flask==3.0.0
+Flask-SocketIO==5.3.5
+python-socketio==5.10.0
+eventlet==0.33.3
+
+# Modbus RTU
+pymodbus==3.5.4
+pyserial==3.5
+
+# Configuration
+python-dotenv==1.0.0
+
+# Logging and utilities
+coloredlogs==15.0.1
+watchdog==3.0.0
+
+# Testing (optional)
+pytest==7.4.3
+pytest-mock==3.12.0
+
+# MQTT (optional, fase 2)
+# paho-mqtt==1.6.1

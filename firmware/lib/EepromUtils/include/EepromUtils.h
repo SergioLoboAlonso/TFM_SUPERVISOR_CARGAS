@@ -10,12 +10,12 @@
 
 namespace EepromUtils {
 
-// Inicialización del backend EEPROM. En AVR no es necesaria, pero se expone
-// para mantener portabilidad futura (ESP requiere EEPROM.begin(N)).
-void begin();                                   // Inicializa backend EEPROM si aplica
+// Inicialización de EEPROM.
+// portabilidad futura (ESP requiere EEPROM.begin(N)).
+void begin();                                   
 
 // Lectura/escritura de UnitID (1..247). Si no se ha provisionado, retorna 0.
-uint16_t readUnitId();                          // Lee Unit ID (1..247); 0 si no provisionado
+uint16_t readUnitId();                          
 void     writeUnitId(uint16_t uid);             // Escribe Unit ID persistente
 
 // Serial de fábrica (32-bit en MVP). Si no hay valor, retorna 0.

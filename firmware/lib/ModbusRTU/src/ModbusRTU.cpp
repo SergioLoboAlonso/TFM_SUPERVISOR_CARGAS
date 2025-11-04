@@ -21,11 +21,7 @@
 #include "registersModbus.h"
 #include "crc16_utils.h" // Unifica CRC usando utilidades comunes
 #include "firmware_version.h" // Para componer la respuesta de Identify (0x11)
-
-// ---------- Config mínimos ----------
-#ifndef UNIT_ID
-  #define UNIT_ID 1
-#endif
+#include <string.h> // memset
 
 // ---------- Excepciones ----------
 enum : uint8_t {
@@ -45,6 +41,12 @@ void ModbusRTU::setTransmit(bool en){
 }
 
 void ModbusRTU::clearRx(){
+  // Por higiene, borrar los bytes válidos almacenados antes de reiniciar el índice.
+  // No es estrictamente necesario (m_rxLen gobierna), pero evita lecturas accidentales
+  // de basura en diagnósticos y facilita el debug.
+  if (m_rxLen) {
+    memset(m_rxBuf, 0, m_rxLen);
+  }
   m_rxLen = 0;
 }
 
@@ -54,16 +56,14 @@ void ModbusRTU::begin(HardwareSerial& serial, uint32_t baud, uint8_t derePin){
   m_derePin = derePin;
 
   pinMode(m_derePin, OUTPUT);
-  setTransmit(false);                             // RX por defecto
+  setTransmit(false);                             // RX por defecto al ser esclavo
 
-  m_serial->begin(baud, SERIAL_8N1);
-
+  (*m_serial).begin(baud, SERIAL_8N1); //Iniciado Serial definido por tipo de placa
   // Tiempos RTU (en microsegundos)
-  // 1 carácter ~ 10 bits -> 10/baud s -> (10e6/baud) us
   uint32_t char_us = (10000000UL / baud);
-  // Tiempos Modbus (usar márgenes)
-  t15_us = (char_us * 15) / 10;                  // ~1.5 char
-  t35_us = (char_us * 35) / 10;                  // ~3.5 char
+  // Tiempos Modbus estándar (3.5 caracteres para frame boundary)
+  t15_us = (char_us * 15) / 10;                  // t~1.5 char
+  t35_us = (char_us * 35) / 10;                  // t~3.5 char (estándar Modbus RTU)
 
   lastByteUs = 0;
   clearRx();
@@ -79,9 +79,12 @@ void ModbusRTU::sendResponse(const uint8_t* p, uint8_t n){
   buf[n++] = uint8_t(crc & 0xFF);                 // CRC L
   buf[n++] = uint8_t(crc >> 8);                   // CRC H
 
+  // Incrementar contador de respuestas TX exitosas
+  regs_diag_inc(HR_DIAG_TRAMAS_TX_OK);
+
   setTransmit(true);
-  m_serial->write(buf, n);
-  m_serial->flush();                               // espera TX vacía
+  (*m_serial).write(buf, n);
+  (*m_serial).flush();                               // espera TX vacía
   // Pequeña guarda para asegurar que el transceptor RS‑485 completa el envío
   // antes de volver a modo recepción (ayuda en algunos MAX485 puentados DE/RE)
   if(t15_us > 0){
@@ -108,8 +111,7 @@ void ModbusRTU::handleReadHolding(uint8_t unit, uint16_t start, uint16_t count, 
   }
 
   uint16_t words[64];                             // suficiente para MAX_* = 32
-  bool ok = isInput
-    ? regs_read_input(start,  tmpCnt, words)
+  bool ok = isInput ? regs_read_input(start,  tmpCnt, words)
     : regs_read_holding(start,tmpCnt, words);
 
   if(!ok){ sendException(unit, isInput?0x04:0x03, MB_EX_ILLEGAL_DATA_ADDRESS); return; }
@@ -166,21 +168,66 @@ void ModbusRTU::handleWriteMultiple(uint8_t unit, uint16_t start, uint16_t count
 void ModbusRTU::handleRequest(const uint8_t* p, uint8_t n){
   // Mínimo absoluto para RTU: unit(1) + func(1) + CRC(2) = 4 bytes
   if(n < 4) return;
-  // Validar CRC
-  uint16_t rx_crc = uint16_t(p[n-2]) | (uint16_t(p[n-1])<<8);
-  if(modbus_crc16(p, n-2) != rx_crc){            // Verificación CRC con utils
-  regs_diag_inc(HR_DIAG_RX_CRC_ERROR);
-    return;
-  }
-
+  
   const uint8_t unit = p[0];
   const uint8_t func = p[1];
-
   const bool isBroadcast = (unit == 0);
-  if(!isBroadcast && unit != UNIT_ID){
-    // No es para mí
+  
+  // ═══════════════════════════════════════════════════════════
+  // Validación estructural de frame Modbus RTU
+  // ═══════════════════════════════════════════════════════════
+  
+  // 1. UnitID debe estar en rango válido: 0 (broadcast) o 1..247
+  //    Esto descarta >90% de fragmentos basura (ej: 0xFF, 0x80, etc.)
+  if(unit > 247){
+    return; // UnitID fuera de rango Modbus → fragmento basura
+  }
+  
+  // 2. Function code: bit7=0 (normal), bit7=1 (excepción/respuesta)
+  //    En modo esclavo solo recibimos requests (bit7=0)
+  //    0x80+ son responses/exceptions que un esclavo NO debería recibir
+  if(func & 0x80){
+    return; // Exception response recibida por esclavo → inválido
+  }
+  
+  // 3. Function code debe estar en rango razonable (0x01..0x7F)
+  //    La mayoría de funciones Modbus están en 0x01..0x18 y 0x2B
+  //    Valores como 0x00, 0x19..0x2A, 0x2C..0x7F son inusuales
+  //    Por seguridad, solo rechazamos 0x00 (claramente inválido)
+  if(func == 0x00){
+    return; // Function code 0x00 no existe en Modbus
+  }
+  
+  // 4. Filtrado por UnitID: solo procesar frames dirigidos a este dispositivo
+  if(!isBroadcast && unit != regs_get_unit_id()){
+    // Frame válido pero para otro dispositivo → ignorar silenciosamente
     return;
   }
+  
+  // ═══════════════════════════════════════════════════════════
+  // 5. Validación de longitud esperada por función
+  // ═══════════════════════════════════════════════════════════
+  // TEMPORALMENTE DESHABILITADA para debugging
+  // TODO: Implementar validación robusta después de confirmar funcionamiento básico
+  
+  bool lengthValid = true; // Aceptar cualquier longitud por ahora
+  
+  if(!lengthValid){
+    // Longitud incoherente con la función → frame fragmentado
+    return;
+  }
+  
+  // Validar CRC solo para frames dirigidos a este dispositivo
+  uint16_t rx_crc = uint16_t(p[n-2]) | (uint16_t(p[n-1])<<8);
+  if(modbus_crc16(p, n-2) != rx_crc){            // Verificación CRC con utils
+    regs_diag_inc(HR_DIAG_RX_CRC_ERROR);
+    return;
+  }
+
+  // Incrementar contador de frames RX válidos (después de validar CRC)
+  regs_diag_inc(HR_DIAG_TRAMAS_RX_OK);
+
+  // func ya está definido arriba, no redefinir
 
   // Validación mínima por función (algunas no llevan campo de dirección/contador)
   switch(func){
@@ -212,7 +259,28 @@ void ModbusRTU::handleRequest(const uint8_t* p, uint8_t n){
       uint16_t start = u16_be(&p[2]);
       uint16_t count = u16_be(&p[4]);
       uint8_t  bc    = p[6];
-      if(count==0 || bc != (uint8_t)(count*2) || n != (uint8_t)(9 + bc)){
+
+      // DEBUG: Log recepción 0x10 para diagnóstico Uno vs Micro
+      #ifdef __AVR_ATmega32U4__
+      if (Serial) {  // Solo si Serial USB está listo
+        Serial.print(F("0x10 RX: n="));
+        Serial.print(n);
+        Serial.print(F(" bc="));
+        Serial.print(bc);
+        Serial.print(F(" cnt="));
+        Serial.print(count);
+        Serial.print(F(" exp="));
+        Serial.println(9 + bc);
+      }
+      #endif
+
+      // Validación robusta: tolera bytes extra después de los datos (antes del CRC)
+      // pymodbus puede añadir padding/bytes extra que se ignoran si el CRC es correcto.
+      // - Mínimos correctos (count > 0, bc == count*2)
+      // - Longitud suficiente (n debe ser al menos 9 + bc). Bytes extra OK si CRC válido.
+      // Nota: n incluye CRC(2), así que frame mínimo = unit(1)+func(1)+addr(2)+cnt(2)+bc(1)+data(bc)+CRC(2) = 9+bc
+      const uint8_t minLen = (uint8_t)(9 + bc);
+      if(count==0 || bc != (uint8_t)(count*2) || n < minLen){
         sendException(unit, func, MB_EX_ILLEGAL_DATA_VALUE); return;
       }
       // Convertir bytes big-endian a words
@@ -249,15 +317,27 @@ void ModbusRTU::handleRequest(const uint8_t* p, uint8_t n){
 // ---------- Bucle de recepción ----------
 // Estrategia: acumular bytes y delimitar por silencio >= t3.5 (micros).
 void ModbusRTU::poll(){
-  if(!m_serial) return;
+  if(!m_serial) return; // Seguridad, primero inicializar
+
+  // Debug: contar bytes disponibles ANTES de leer
+  #if defined(__AVR_ATmega32U4__)
+    static uint32_t lastLogMs = 0;
+    int avail = (*m_serial).available();
+    if (Serial && avail > 0 && (millis() - lastLogMs) > 100) {
+      Serial.print(F("🔵 Serial1.available()="));
+      Serial.println(avail);
+      lastLogMs = millis();
+    }
+  #endif
 
   // Leer todo lo disponible
-  while(m_serial->available()){
-    int b = m_serial->read();
+  while((*m_serial).available()){
+    int b = (*m_serial).read();
     if(b < 0) break;
     // Si el buffer se llena, los bytes extra se descartan (no se rompe la ejecución).
     // Alternativa: registrar overruns con regs_diag_inc(HR_DIAG_OVERRUNS).
     if(m_rxLen < sizeof(m_rxBuf)) m_rxBuf[m_rxLen++] = uint8_t(b);
+    else regs_diag_inc(HR_DIAG_DESBORDES_UART); // Registrar overflow
     lastByteUs = micros();
   }
 
@@ -267,12 +347,28 @@ void ModbusRTU::poll(){
   // Si pasó silencio >= t3.5, considerar trama completa
   uint32_t now = micros();
   if( (now - lastByteUs) >= t35_us ){
+    // Debug: log antes de procesar para confirmar recepción
+    #if defined(__AVR_ATmega32U4__)
+      if (Serial && m_rxLen >= 8) {
+        uint8_t unit = m_rxBuf[0];
+        uint8_t func = m_rxBuf[1];
+        if (func == 0x10) {
+          Serial.print(F("📥 RX frame: unit="));
+          Serial.print(unit);
+          Serial.print(F(" func=0x10 len="));
+          Serial.println(m_rxLen);
+        }
+      }
+    #endif
     // Procesar
     handleRequest(m_rxBuf, m_rxLen);
     clearRx();
   }
 }
-
+//
+//
+//
+//
 // ---------- Report Slave ID (0x11) ----------
 void ModbusRTU::handleReportSlaveId(uint8_t unit){
 

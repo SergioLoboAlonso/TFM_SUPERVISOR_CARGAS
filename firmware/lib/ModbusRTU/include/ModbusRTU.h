@@ -5,8 +5,8 @@
 // Qué hace
 // - Implementa un esclavo Modbus RTU minimalista con las funciones:
 //   0x03 (Read Holding Registers), 0x04 (Read Input Registers), 0x06 (Write Single Register),
-//   0x11 (Report Slave ID — información de dispositivo, sin trigger),
-//   0x41 (Propietaria) — Identify + información (trigger + respuesta informativa).
+//   0x11 (Report Slave ID — información de dispositivo, sin trigger Blink),
+//   0x41 (Propietaria) — Identify + información (trigger Blink + respuesta informativa).
 // - Gestiona broadcast (unidad=0) únicamente para 0x06: aplica la escritura sin responder.
 //
 // Cómo delimita tramas
@@ -21,8 +21,8 @@
 // Consideraciones de implementación
 // - Endianness: Modbus define palabras de 16 bits en big-endian (MSB primero).
 // - CRC: Modbus CRC16 polinomio 0xA001, acumulando LSB primero en la palabra.
-// - Buffer RX: 64 bytes es suficiente para peticiones/respuestas habituales (hasta 32 regs).
-//   Si se necesitara más, ajustar con cuidado para no impactar RAM.
+// - Buffer RX: 64 bytes es suficiente para peticiones/respuestas max de este sistema (hasta 32 regs).
+//   Si se necesitara más, cuidado RAM.
 // -----------------------------------------------------------------------------
 #pragma once
 #include <Arduino.h>
@@ -32,27 +32,26 @@ public:
   ModbusRTU() = default;
 
   // Inicializa el puerto serie y pin DE/RE del MAX485.
-  // - serial: referencia al HardwareSerial (ej. Serial)
+  // - serial: referencia al HardwareSerial (ej. Serial en Uno Serial1 en Micro)
   // - baud: baudios (ej. 115200)
   // - derePin: pin que controla Driver Enable/Receiver Enable del MAX485
   // Además calcula t1.5 y t3.5 en microsegundos para delimitar tramas por silencio.
   void begin(HardwareSerial& serial, uint32_t baud, uint8_t derePin); // Inicializa UART y pin DE/RE
 
   // Procesa bytes entrantes; llamar en cada loop().
-  // - Acumula bytes hasta detectar silencio >= t3.5 y entonces parsea la petición.
-  // - Si la petición no va dirigida a mí (UNIT_ID), se descarta silenciosamente.
+  // - Acumula bytes hasta detectar silencio >= t3.5 y entonces ejecuta la petición.
+  // - Si la petición no va dirigida a mí (UNIT_ID), se descarta.
   // - En broadcast (unit=0), sólo se ejecuta 0x06 y no se responde.
   void poll(); // Procesa tramas entrantes; llamar en cada loop()
 
 private:
-  HardwareSerial* m_serial = nullptr; // Puntero al puerto serie de hardware
-  uint8_t m_derePin = 0;              // Pin para Driver Enable / Receiver Enable
-
+  HardwareSerial* m_serial = nullptr; // Puntero al puerto serie de hardware (Permite usar otras placas Arduino con múltiples UART)
+  uint8_t m_derePin = 0;              // Pin para Driver Enable / Receiver Enable del MAX485
   uint8_t  m_rxBuf[64];               // Buffer de recepción de trama RTU
   uint8_t  m_rxLen = 0;               // Longitud actual del buffer RX
   uint32_t lastByteUs = 0;            // Timestamp (us) del último byte recibido
-  uint32_t t15_us = 0;                // Tiempo de 1.5 caracteres (us)
-  uint32_t t35_us = 0;                // Tiempo de 3.5 caracteres (us)
+  uint32_t t15_us = 0;                // Tiempo de 1.5 caracteres (us) calculado en begin()
+  uint32_t t35_us = 0;                // Tiempo de 3.5 caracteres (us) calculado en begin()
 
   // Controla el transceptor RS-485: HIGH = transmitir, LOW = recibir.
   void setTransmit(bool en);          // Controla el transceptor: true=TX, false=RX

@@ -8,6 +8,7 @@ __pycache__/
 .editorconfig
 # Documentation eliminada por el momento
 docs/
+docs/edge_specification.md
 # Arduino / PlatformIO
 .pio/
 .arduino*

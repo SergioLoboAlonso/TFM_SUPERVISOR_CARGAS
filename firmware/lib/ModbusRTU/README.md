@@ -20,6 +20,7 @@ Escalas:
 - Temp: centi‑grados °C → `IR_MED_TEMPERATURA_CENTI`
 - Aceleración: mg → `IR_MED_ACEL_*_mG`
 - Giro: mdps → `IR_MED_GIRO_*_mdps`
+- Peso: centi‑kg (0.01 kg) → `IR_MED_PESO_KG_CENTI` (leer y dividir entre 100 para kg)
 
 | Banco | Dirección (hex) | Nombre | Acceso | Escala/Unid. | Descripción |
 |---|---:|---|:---:|:---:|---|
@@ -50,6 +51,7 @@ Escalas:
 | Input   | 0x0009 | IR_MED_MUESTRAS_LO | R | LSW | Contador muestras (parte baja) |
 | Input   | 0x000A | IR_MED_MUESTRAS_HI | R | MSW | Contador muestras (parte alta) |
 | Input   | 0x000B | IR_MED_FLAGS_CALIDAD | R | bitmask | Flags de calidad |
+| Input   | 0x000C | IR_MED_PESO_KG_CENTI | R | 0.01 kg | Peso/carga (ej.: 12.34 kg → 1234) |
 | Holding | 0x0020 | HR_DIAG_TRAMAS_RX_OK | R | — | Tramas RX correctas |
 | Holding | 0x0021 | HR_DIAG_RX_CRC_ERROR | R | — | Tramas RX con CRC incorrecto |
 | Holding | 0x0022 | HR_DIAG_RX_EXCEPCIONES | R | — | Excepciones enviadas |

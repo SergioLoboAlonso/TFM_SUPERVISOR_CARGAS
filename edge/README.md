@@ -1,130 +1,223 @@
-# Edge Modbus RTU + Web UI Identify
+# Edge Layer - Supervisor de Cargas
 
-Módulo Edge mínimo en Python que:
+Aplicación web para gestión y monitoreo de dispositivos Modbus RTU.
 
-- Lee periódicamente registros Modbus RTU (por USB‑RS485) del esclavo indicado (UNIT_ID).
-- Expone una UI web local con un botón "Identify" que invoca la función Modbus 0x11 (Report Slave ID):
-	- Dispara el parpadeo de identificación en el firmware por un tiempo por defecto.
-	- Devuelve y muestra Vendor/Modelo/FW en la UI.
-- No usa cloud; todo local.
+## 🚀 Optimización de Rendimiento
 
-## Requisitos
+Discovery de dispositivos **89% más rápido** que la configuración por defecto:
+- **100 UnitIDs**: ~19 segundos (vs ~180s original)
+- **10 UnitIDs**: ~2-3 segundos (vs ~18s original)
 
-- Python 3.10+
-- Adaptador USB‑RS485 conectado (ej.: `/dev/ttyUSB0`, `/dev/tty.usbserial-XXXX`, `COM3`).
-- Dependencias Python (se instalan más abajo):
-	- `pymodbus==3.6.6`, `pyserial`, `Flask`, `python-dotenv`.
+Ver [`docs/PERFORMANCE_OPTIMIZATION.md`](../docs/PERFORMANCE_OPTIMIZATION.md) para detalles completos.
 
-## Instalación rápida
+## Arquitectura
 
+- **3 Ventanas principales**:
+  - **Dashboard** (`/`): Info del adaptador USB-RS485
+  - **Configuración** (`/config`): Discovery, identify, alias, cambio de UnitID
+  - **Polling** (`/polling`): Telemetría en tiempo real con WebSocket
+
+## Estructura del Proyecto
+
+```
+edge/
+├── src/
+│   ├── config.py           # Configuración global
+│   ├── logger.py           # Logging estructurado
+│   ├── modbus_client.py    # Cliente Modbus RTU (pymodbus wrapper)
+│   ├── data_normalizer.py  # Conversión escalados → unidades físicas
+│   ├── device_manager.py   # Discovery, caché de dispositivos
+│   ├── polling_service.py  # Servicio de polling automático
+│   ├── websocket_handler.py # WebSocket para telemetría en tiempo real
+│   └── app.py              # Flask app principal
+├── templates/
+│   ├── dashboard.html
+│   ├── config.html
+│   └── polling.html
+├── static/
+│   ├── css/
+│   │   └── style.css
+│   └── js/
+│       ├── dashboard.js
+│       ├── config.js
+│       └── polling.js
+├── tests/
+│   └── test_normalizer.py
+├── requirements.txt
+├── .env.example
+└── README.md
+```
+
+## Instalación
+
+1. **Crear entorno virtual**:
 ```bash
 cd edge
-python3 -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
+python3 -m venv venv
+source venv/bin/activate  # En Windows: venv\Scripts\activate
+```
+
+2. **Instalar dependencias**:
+```bash
 pip install -r requirements.txt
 ```
 
-Si el editor avisa "No se ha podido resolver la importación ...", asegúrate de que VS Code está usando el intérprete de `.venv` (Python: Select Interpreter) o activa el venv antes de abrir la carpeta.
-
-## Configuración (.env opcional)
-
-Crea `edge/.env` (si no existe). Variables soportadas y valores por defecto:
-
-- `MODBUS_PORT` → puerto serie; auto‑detección si no se define (macOS: `/dev/tty.usb*`, Linux: `/dev/ttyUSB*`, Windows: `COM3`).
-- `MODBUS_BAUD` → baudios (por defecto `115200`).
-- `UNIT_ID` → dirección Modbus del esclavo (por defecto `1`).
-- `POLL_MS` → periodo de sondeo en milisegundos (por defecto `200`).
-- `HOST` → host de Flask (por defecto `0.0.0.0`).
-- `PORT` → puerto HTTP (por defecto `8080`).
-
-Ejemplo `edge/.env`:
-
+3. **Configurar variables de entorno**:
+```bash
+cp .env.example .env
+# Editar .env con tu configuración (puerto serie, baudrate, etc.)
 ```
-MODBUS_PORT=/dev/tty.usbserial-XXXXX
-MODBUS_BAUD=115200
-UNIT_ID=1
-POLL_MS=200
-HOST=0.0.0.0
-PORT=8080
+
+## Configuración
+
+Archivo `.env`:
+
+```bash
+# Puerto serie Modbus RTU (CONFIGURACIÓN MANUAL - sin autodetección)
+# Especificar el puerto del adaptador RS-485
+# MODBUS_PORT=/dev/ttyUSB0         # Linux/Raspberry Pi
+# MODBUS_PORT=/dev/tty.usbserial-XXXXXXX  # macOS (adaptador USB-RS485)
+MODBUS_BAUDRATE=115200
+MODBUS_TIMEOUT=1.0
+
+# Discovery
+DEVICE_UNIT_ID_MIN=1
+DEVICE_UNIT_ID_MAX=10
+
+# Polling
+POLL_INTERVAL_SEC=5.0
+INTER_FRAME_DELAY_MS=50
+
+# Flask app
+FLASK_HOST=0.0.0.0
+FLASK_PORT=8080
+FLASK_DEBUG=True
+
+# Logging
+LOG_LEVEL=INFO
+LOG_FILE=edge.log
 ```
 
 ## Ejecución
 
-Ejecuta siempre desde la carpeta `edge/` (así encuentra `templates/` y el `.env`):
-
 ```bash
 cd edge
-source .venv/bin/activate
-python edge.py
+source venv/bin/activate
+python src/app.py
 ```
 
-- UI: http://0.0.0.0:8080
-- La página se actualiza ~cada 1 s; puedes cambiar `UNIT_ID` y pulsar "Aplicar".
-- Botón "Identify (0x11)" → solicita Identify como operación propia (0x11): el firmware decide la duración y responde con la cadena de identidad.
+Navegar a: http://localhost:8080
 
-## Endpoints
+## Uso
 
-- `GET /` → HTML mínimo con tablas y controles.
-- `GET /state` → JSON con el último estado leído: holding e inputs, flags de conexión y errores.
-- `POST /identify` → body JSON `{ "unit": <id> }`; llama a 0x11 (Report Slave ID) y responde `{ ok, info: { slaveId, running, text } }`.
+### 1. Dashboard
+- Ver info del adaptador USB-RS485
+- Estadísticas globales (tramas TX/RX, errores CRC)
+- Navegar a Configuración o Polling
 
-Pruebas rápidas con curl (opcional):
+### 2. Configuración
+- **Discovery**: Escanear red para descubrir dispositivos (UnitID 1..10)
+- **Identify**: Hacer parpadear LED de dispositivo seleccionado
+- **Editar Alias**: Cambiar alias de dispositivo y guardar a EEPROM
+- **Cambiar UnitID**: Reasignar UnitID de dispositivo
+
+### 3. Polling (Telemetría en Vivo)
+- Seleccionar dispositivos a monitorear
+- Configurar intervalo de polling (segundos)
+- Ver telemetría en tiempo real:
+  - Ángulos X/Y (°)
+  - Temperatura (°C)
+  - Aceleración X/Y/Z (g)
+  - Giroscopio X/Y/Z (°/s)
+  - Peso (kg)
+  - Contador de muestras
+- Log de eventos (timeouts, errores CRC, etc.)
+
+## API REST
+
+### Adaptador
+- `GET /api/adapter` - Info del adaptador USB-RS485
+
+### Dispositivos
+- `POST /api/discover` - Ejecutar discovery (body: `{unit_id_min, unit_id_max}`)
+- `GET /api/devices` - Lista de dispositivos en caché
+- `GET /api/devices/{unit_id}` - Info de dispositivo específico
+- `POST /api/devices/{unit_id}/identify` - Activar LED (body: `{duration_sec}`)
+- `PUT /api/devices/{unit_id}/alias` - Guardar alias (body: `{alias}`)
+- `PUT /api/devices/{unit_id}/unit_id` - Cambiar UnitID (body: `{new_unit_id}`)
+
+### Polling
+- `POST /api/polling/start` - Iniciar polling (body: `{interval_sec, unit_ids}`)
+- `POST /api/polling/stop` - Detener polling
+- `GET /api/polling/status` - Estado del polling
+- `WebSocket /api/polling/stream` - Stream de telemetría en tiempo real
+
+### Health
+- `GET /api/health` - Estado del Edge (uptime, conexiones)
+
+## Testing
 
 ```bash
-# Obtener estado
-curl -s http://localhost:8080/state | jq
-
-# Identify (0x11) para UNIT 1
-curl -s -X POST http://localhost:8080/identify \
-	-H 'Content-Type: application/json' \
-	-d '{"unit":1}'
+pytest tests/
 ```
 
-## Qué registra el Edge
+## Troubleshooting
 
-- Holding info 0x0000..0x0009 (10 regs): vendor, product, hw/fw, unit_echo, caps, uptime L/H, status, errors.
-- Input regs 0x0000..0x000B (12 regs): ángulos X/Y (mdeg), temp (mC), acc x/y/z (mg), gyr x/y/z (mdps), sample L/H, flags.
+### Identificar el puerto serie correcto (RS-485 vs Arduino)
 
-## Notas de implementación (resumen)
+**macOS:**
+```bash
+# Listar todos los puertos USB
+ls /dev/tty.*
 
-- Cliente: `ModbusSerialClient` (pymodbus 3.6.x). En serie, el framer RTU es el comportamiento por defecto.
-- Lectura periódica en hilo: `read_input_registers()` y `read_holding_registers()` con `unit=UNIT_ID`.
-- Estado compartido para la UI, con `connected`, `last_error`, `holding`, `input`.
-- Reconexión automática en caso de error.
-
-## Solución de problemas
-
-- "Address already in use" al arrancar Flask:
-	- Otro proceso usa el puerto `PORT` (8080). Cambia `PORT` en `.env` o cierra el proceso previo.
-	- Si se quedó colgado, puedes matar por puerto (macOS):
-		```bash
-		lsof -i :8080
-		kill -9 <PID>
-		```
-
-- Timeout o lecturas erróneas:
-	- Verifica `MODBUS_PORT`, cableado, resistencia de terminación (120 Ω), DE/RE del MAX485, tierra común.
-	- Asegúrate de que `UNIT_ID` es el correcto. Recuerda: los broadcasts (UNIT 0) no obtienen respuesta.
-	- Revisa baudios/paridad (por defecto 115200 8N1).
-
-- "Module not found" (flask, pymodbus):
-	- Activa el venv (`source .venv/bin/activate`) e instala `pip install -r requirements.txt`.
-	- En VS Code, selecciona el intérprete del venv para evitar avisos del linter.
-
-- macOS: permisos de puerto serie
-	- Normalmente no hace falta sudo; si hay problemas, comprueba grupo/permisos del dispositivo en `/dev`.
-
-## Estructura
-
-```
-edge/
-	edge.py                # app principal (poll + Flask)
-	templates/
-		index.html           # UI mínima
-	requirements.txt       # dependencias
-	.env                   # (opcional) variables de entorno locales
+# Identificar cuál es el RS-485:
+# 1. Desconectar SOLO el adaptador RS-485
+# 2. Anotar puertos presentes
+# 3. Reconectar RS-485
+# 4. Ver qué puerto nuevo apareció → ese es el RS-485
 ```
 
----
+**Linux:**
+```bash
+# Listar puertos
+ls /dev/ttyUSB*
 
-¿Quieres que prepare un Dockerfile para este módulo edge o una unidad systemd para arranque automático? Puedo añadirlo como extra cuando lo necesites.
+# Ver info detallada
+dmesg | grep tty
+# Buscar el adaptador RS-485 (ej. "FTDI", "CH340", "CP210x")
+```
+
+**Configuración**:
+- Copiar el puerto del adaptador RS-485 a `.env`:
+  ```bash
+  MODBUS_PORT=/dev/tty.usbserial-XXXXXXX  # El del RS-485, NO el Arduino
+  ```
+
+### Puerto serie no detectado
+```bash
+# macOS/Linux: listar puertos disponibles
+ls /dev/tty.*
+ls /dev/ttyUSB*
+
+# Permisos en Linux
+sudo usermod -a -G dialout $USER
+sudo chmod 666 /dev/ttyUSB0
+```
+
+### Timeout al leer dispositivos
+- Verificar conexión física RS-485 (A, B, GND)
+- Verificar baudrate coincide con firmware (115200)
+- Verificar UnitID del dispositivo
+- Aumentar `MODBUS_TIMEOUT` en `.env`
+
+### Errores CRC
+- Verificar cableado (colisiones, ruido)
+- Aumentar `INTER_FRAME_DELAY_MS` en `.env`
+
+## Licencia
+
+MIT
+
+## Autor
+
+Sergio Lobo - TFM UNIR 2025

@@ -67,9 +67,13 @@ extern "C" {
 // -----------------------------
 // BLOQUE 2: Configuración (Holding 4xxxx, lectura/escritura)
 // -----------------------------
-#define HR_CFG_BAUDIOS         0x0010  // 40017 R/W  Código baudios: 0=9600,1=19200,2=38400,3=57600,4=115200
+#define HR_CFG_BAUDIOS         0x0010  // 40017 R    Código baudios (ESTÁTICO, sólo lectura): 0=9600,1=19200,2=38400,3=57600,4=115200
 #define HR_CFG_MPU_FILTRO_HZ   0x0011  // 40018 R/W  Filtro MPU (Hz) codificado
-#define HR_CMD_GUARDAR_APLICAR 0x0012  // 40019 W    0=noop, 0xA55A=save, 0xB007=apply
+#define HR_CMD_GUARDAR         0x0012  // 40019 W    0=noop, 0xA55A=save EEPROM
+// Compatibilidad con nomenclatura antigua (APLICAR era un no-op):
+#ifndef HR_CMD_GUARDAR_APLICAR
+#define HR_CMD_GUARDAR_APLICAR HR_CMD_GUARDAR
+#endif
 #define HR_CMD_IDENT_SEGUNDOS  0x0013  // 40020 W    Start Identify: segundos (0=stop)
 #define HR_CFG_ID_UNIDAD       0x0014  // 40021 R/W  Unit ID (1..247) (persistente)
 #define HR_CFG_RESERVED_END    0x001F  // reserva de 0x0015..0x001F
@@ -90,6 +94,7 @@ extern "C" {
 #define IR_MED_MUESTRAS_LO     0x0009  // 30010 R  contador muestras (LSW)
 #define IR_MED_MUESTRAS_HI     0x000A  // 30011 R  contador muestras (MSW)
 #define IR_MED_FLAGS_CALIDAD   0x000B  // 30012 R  flags de calidad (bitmask)
+#define IR_MED_PESO_KG         0x000C  // 30013 R  Peso/carga en kg (kg*100=no decimales)
 #define IR_RESERVED_END        0x001F  // reserva
 
 // -----------------------------
@@ -145,7 +150,7 @@ extern "C" {
 
 // Duración por defecto del Identify cuando se solicita por 0x11 (segundos)
 #ifndef IDENTIFY_DEFAULT_SECS
-#define IDENTIFY_DEFAULT_SECS 5
+#define IDENTIFY_DEFAULT_SECS 10
 #endif
 enum {
   DEV_CAP_RS485   = (1u<<0), // Soporta comunicación RS‑485
@@ -187,13 +192,17 @@ bool regs_read_holding(uint16_t addr, uint16_t count, uint16_t* out);
 // Escrituras
 // Secuencia de escrituras en HR_CMD_IDENT_SEGUNDOS para detectar eventos
 uint16_t regs_get_ident_write_seq();
+// Secuencia de escrituras en HR_CMD_GUARDAR para detectar eventos (save)
+uint16_t regs_get_save_write_seq();
+// Compatibilidad con API anterior: alias al contador actual
+static inline uint16_t regs_get_save_apply_write_seq(){ return regs_get_save_write_seq(); }
 
 // 0x06 (single): Escribe un registro Holding en 'addr' con 'value'. Validaciones:
 //  - HR_CFG_BAUDIOS: 0..4 (códigos de baudios)
 //  - HR_CFG_MPU_FILTRO_HZ: rango codificado (p.ej. <=200)
 //  - HR_CFG_ID_UNIDAD: 1..247
 //  - HR_CMD_IDENT_SEGUNDOS: cualquier valor (0=stop)
-//  - HR_CMD_GUARDAR_APLICAR: 0xA55A ó 0xB007
+//  - HR_CMD_GUARDAR: 0xA55A (persistir UnitID y Alias a EEPROM)
 bool regs_write_holding(uint16_t addr, uint16_t value);
 
 // 0x10 (multiple): Escribe 'count' registros Holding consecutivos a partir de 'addr'.
@@ -207,6 +216,10 @@ void regs_set_angles_mdeg(int16_t ax, int16_t ay);
 void regs_set_temp_mc(int16_t mc);
 void regs_set_acc_mg(int16_t x, int16_t y, int16_t z);
 void regs_set_gyr_mdps(int16_t x, int16_t y, int16_t z);
+// Peso/carga en kg (int16, rango aproximado ±327.67 kg)
+// Ej.: 12.34 kg -> 1234
+void regs_set_kg_load(int16_t kg_load);
+
 
 // Incrementa contador de muestras (32 bits expuesto como L/H en IR_MED_MUESTRAS_*)
 void regs_bump_sample_counter(void);
@@ -215,6 +228,9 @@ void regs_bump_sample_counter(void);
 void regs_diag_inc(uint16_t reg_addr);
 void regs_set_status(uint16_t mask, bool enable);
 void regs_set_error (uint16_t mask, bool enable);
+
+// Consultas rápidas del estado
+uint16_t regs_get_unit_id();
 
 #ifdef __cplusplus
 } // extern "C"

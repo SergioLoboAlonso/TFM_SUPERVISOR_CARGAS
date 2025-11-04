@@ -1,5 +1,5 @@
 #!/bin/sh
-'''exec' "/Users/sergiolobo/Desktop/MASTER UNIR/MASTER IOT/2 SEMESTRE/TFM/TFM_SUPERVISOR_CARGAS/edge/venv/bin/python" "$0" "$@"
+'''exec' "/Users/sergiolobo/Desktop/MASTER UNIR/MASTER IOT/2 SEMESTRE/TFM/TFM_SUPERVISOR_CARGAS/edge/venv/bin/python3" "$0" "$@"
 ' '''
 # -*- coding: utf-8 -*-
 import re

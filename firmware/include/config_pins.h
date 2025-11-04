@@ -34,6 +34,17 @@
   #define UART_BAUDRATE 115200UL       // 8N1: 8 data bits, sin paridad, 1 bit de parada
 #endif
 
+// Puerto serie para Modbus RTU: autodetectar según placa o permitir override
+#ifndef MODBUS_SERIAL
+  #if defined(__AVR_ATmega32U4__)        // Arduino Micro/Leonardo
+    #define MODBUS_SERIAL Serial1        // Micro: Serial1 es UART hardware (pines 0/1)
+  #elif defined(__AVR_ATmega2560__)      // Arduino Mega
+    #define MODBUS_SERIAL Serial1        // Mega: Serial1 por defecto (pines 18/19)
+  #else                                  // Arduino UNO/Nano (ATmega328P)
+    #define MODBUS_SERIAL Serial         // UNO/Nano: Serial es el único UART
+  #endif
+#endif
+
 // MAX485: pin digital que controla DE y RE (puenteados)
 // Puede sobreescribirse con -D RS485_DERE_PIN=<n> en platformio.ini
 #ifndef RS485_DERE_PIN

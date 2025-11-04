@@ -50,7 +50,6 @@ namespace {
 namespace EepromUtils {
 
 void begin() {
-	// En AVR no es necesario inicializar EEPROM.
 	ensureHeader();
 }
 

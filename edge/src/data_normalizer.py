@@ -165,6 +165,7 @@ class DataNormalizer:
                 Bit 0: RS485
                 Bit 1: MPU6050
                 Bit 2: Identify
+                Bit 3: Wind (anemómetro analógico)
         
         Returns:
             Lista de strings con capacidades activas
@@ -176,6 +177,8 @@ class DataNormalizer:
             capabilities.append("MPU6050")
         if cap_reg & (1 << 2):
             capabilities.append("Identify")
+        if cap_reg & (1 << 3):
+            capabilities.append("Wind")
         return capabilities
     
     @staticmethod

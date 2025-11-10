@@ -25,10 +25,15 @@ class Config:
     DEVICE_UNIT_ID_MIN = int(os.getenv('DEVICE_UNIT_ID_MIN', '1'))
     DEVICE_UNIT_ID_MAX = int(os.getenv('DEVICE_UNIT_ID_MAX', '10'))
     DISCOVERY_RETRY_ON_FOUND = False  # No reintentar cuando se encuentre un dispositivo
+    DISCOVERY_BATCH_SIZE = int(os.getenv('DISCOVERY_BATCH_SIZE', '20'))  # Escanear a lo sumo 20 unit IDs por tanda
     
     # Polling
     POLL_INTERVAL_SEC = float(os.getenv('POLL_INTERVAL_SEC', '2.0'))
-    INTER_FRAME_DELAY_MS = int(os.getenv('INTER_FRAME_DELAY_MS', '10'))  # Reducido de 50ms a 10ms a 115200 baud
+    INTER_FRAME_DELAY_MS = int(os.getenv('INTER_FRAME_DELAY_MS', '15'))  # Aumentado a 15ms para dar margen al Micro (32U4)
+    MAX_POLL_DEVICES = int(os.getenv('MAX_POLL_DEVICES', '20'))  # Máximo de dispositivos monitorizados simultáneamente
+    PER_DEVICE_REFRESH_SEC = float(os.getenv('PER_DEVICE_REFRESH_SEC', '1.0'))  # Objetivo de refresco por dispositivo
+    OFFLINE_BACKOFF_SEC = float(os.getenv('OFFLINE_BACKOFF_SEC', '5.0'))  # Backoff base al marcar offline
+    OFFLINE_BACKOFF_MAX_SEC = float(os.getenv('OFFLINE_BACKOFF_MAX_SEC', '60.0'))  # Límite superior backoff adaptativo
     
     # Flask
     FLASK_HOST = os.getenv('FLASK_HOST', '0.0.0.0')

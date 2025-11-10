@@ -95,6 +95,8 @@ extern "C" {
 #define IR_MED_MUESTRAS_HI     0x000A  // 30011 R  contador muestras (MSW)
 #define IR_MED_FLAGS_CALIDAD   0x000B  // 30012 R  flags de calidad (bitmask)
 #define IR_MED_PESO_KG         0x000C  // 30013 R  Peso/carga en kg (kg*100=no decimales)
+#define IR_MED_WIND_SPEED_CMPS 0x000D  // 30014 R  Velocidad viento en cm/s (m/s * 100)
+#define IR_MED_WIND_DIR_DEG    0x000E  // 30015 R  Dirección viento en grados (0-359)
 #define IR_RESERVED_END        0x001F  // reserva
 
 // -----------------------------
@@ -156,6 +158,7 @@ enum {
   DEV_CAP_RS485   = (1u<<0), // Soporta comunicación RS‑485
   DEV_CAP_MPU6050 = (1u<<1), // Integra sensor MPU‑6050
   DEV_CAP_IDENT   = (1u<<2), // Soporta Identify (parpadeo LED)
+  DEV_CAP_WIND    = (1u<<3), // Anemómetro analógico de velocidad de viento
 };
 
 enum {
@@ -220,6 +223,10 @@ void regs_set_gyr_mdps(int16_t x, int16_t y, int16_t z);
 // Ej.: 12.34 kg -> 1234
 void regs_set_kg_load(int16_t kg_load);
 
+// Velocidad y dirección del viento
+// - speed_cmps: velocidad en cm/s (m/s * 100); ej: 3.45 m/s -> 345
+// - dir_deg: dirección en grados 0-359 (0=Norte, 90=Este, 180=Sur, 270=Oeste)
+void regs_set_wind(uint16_t speed_cmps, uint16_t dir_deg);
 
 // Incrementa contador de muestras (32 bits expuesto como L/H en IR_MED_MUESTRAS_*)
 void regs_bump_sample_counter(void);

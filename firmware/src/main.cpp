@@ -15,11 +15,11 @@
 #if SENSORS_MPU_ENABLED
 #include <MPU6050Sensor.h>
 #endif
-#if SENSORS_TEMP_ENABLED
-#include <TemperatureSensor.h>
-#endif
 #if SENSORS_LOAD_ENABLED
 #include <LoadSensor.h>
+#endif
+#if SENSORS_WIND_ENABLED
+#include <WindSpeedSensor.h>
 #endif
 
 // Identificación visual
@@ -31,13 +31,13 @@ static ModbusRTU modbus_client;              // Esclavo Modbus RTU
 // Gestor de sensores y sensor(es) registrados
 static SensorManager sensorManager;         // Orquestador de captura/normalización
 #if SENSORS_MPU_ENABLED
-static MPU6050Sensor sensor_mpu0;           // IMU MPU6050 (inclinómetro + gyro + temp)
-#endif
-#if SENSORS_TEMP_ENABLED
-static TemperatureSensor sensor_temp0;      // Sensor de temperatura
+static MPU6050Sensor sensor_mpu0;           // IMU MPU6050 (accel + gyro + temp interna + ángulos)
 #endif
 #if SENSORS_LOAD_ENABLED
 static LoadSensor sensor_load0;             // Sensor de carga/corriente
+#endif
+#if SENSORS_WIND_ENABLED
+static WindSpeedSensor sensor_wind0;        // Anemómetro analógico (0.4–2.0V → 0–32.4 m/s)
 #endif
 
 // Seguimiento del último valor aplicado de HR_CMD_IDENT_SEGUNDOS
@@ -91,12 +91,11 @@ void setup() {
 #if SENSORS_MPU_ENABLED
   sensorManager.registerSensor(&sensor_mpu0);
 #endif
-#if SENSORS_TEMP_ENABLED
-  sensorManager.registerSensor(&sensor_temp0);
-#endif
-// Nota: Acelerómetro dedicado deprecado; MPU6050 ya aporta aceleración e inclinación
 #if SENSORS_LOAD_ENABLED
   sensorManager.registerSensor(&sensor_load0);
+#endif
+#if SENSORS_WIND_ENABLED
+  sensorManager.registerSensor(&sensor_wind0);
 #endif
   sensorManager.beginAll();
 }

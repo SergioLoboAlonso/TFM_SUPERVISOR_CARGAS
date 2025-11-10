@@ -29,7 +29,7 @@
 - ✅ `normalize_telemetry()`: IR → ángulos, temp, accel, gyro, carga
 - ✅ Helpers: to_int16, to_uint32
 - ✅ Decode/encode alias (ASCII packing)
-- ✅ Decode vendor/product, versiones, capabilities, status/error flags
+- ✅ Decode vendor/product, versiones, capabilities (incl. Wind), status/error flags
 
 #### 5. **device_manager.py** (336 líneas)
 - ✅ Clase `Device`: modelo con unit_id, identidad, alias, status, timestamps

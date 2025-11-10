@@ -40,10 +40,15 @@ static struct {
   uint16_t fw_version  = (uint16_t)((FW_VERSION_GLOBAL & 0xFF) << 8) | (FW_VERSION_MINOR & 0xFF); // FW: mayor/menor (parche via Identify)
   uint16_t unit_id     = UNIT_ID;                // Unit ID efectivo
   uint16_t caps        = (DEV_CAP_RS485 | DEV_CAP_IDENT 
-#if defined(SENSORS_MPU_ENABLED) && SENSORS_MPU_ENABLED
+
+    #if defined(SENSORS_MPU_ENABLED) && SENSORS_MPU_ENABLED
                          | DEV_CAP_MPU6050
 #endif
-                         ); // Capacidades según build_flags
+#if defined(SENSORS_WIND_ENABLED) && SENSORS_WIND_ENABLED
+                         | DEV_CAP_WIND
+#endif
+                         ); // Capacidades según build_flags (añade WIND si definido)
+                         
   uint16_t status      = DEV_STATUS_OK;          // Flags de estado
   uint16_t errors      = DEV_ERR_NONE;           // Flags de error
 
@@ -78,6 +83,8 @@ static struct {
   int16_t  gyr_y_mdps  = 0;
   int16_t  gyr_z_mdps  = 0;
   int16_t  load_kg     = 0;                      // Peso/carga en kg (kg*100=no decimales)
+  uint16_t wind_speed_cmps = 0;                  // Velocidad viento en cm/s (m/s * 100)
+  uint16_t wind_dir_deg = 0;                     // Dirección viento en grados (0-359)
   uint32_t sample_cnt  = 0;                      // Contador de muestras (32 bits)
 
   // Diagnóstico
@@ -268,6 +275,8 @@ bool regs_read_input(uint16_t addr, uint16_t count, uint16_t* out){//addr direcc
       case IR_MED_GIRO_Y_mdps:      out[i] = (uint16_t)R.gyr_y_mdps; break;
       case IR_MED_GIRO_Z_mdps:      out[i] = (uint16_t)R.gyr_z_mdps; break;
       case IR_MED_PESO_KG:          out[i] = (uint16_t)R.load_kg;  break;
+      case IR_MED_WIND_SPEED_CMPS:  out[i] = R.wind_speed_cmps; break;
+      case IR_MED_WIND_DIR_DEG:     out[i] = R.wind_dir_deg; break;
       case IR_MED_MUESTRAS_LO:      out[i] = (uint16_t)(R.sample_cnt & 0xFFFF); break;
       case IR_MED_MUESTRAS_HI:      out[i] = (uint16_t)((R.sample_cnt>>16) & 0xFFFF); break;
       case IR_MED_FLAGS_CALIDAD:     out[i] = 0; break; // placeholder de calidad
@@ -557,6 +566,17 @@ void regs_set_gyr_mdps(int16_t x, int16_t y, int16_t z){ R.gyr_x_mdps=x; R.gyr_y
  * @param kg_load Peso en kg (int16). Ej.: 12.34 kg -> 1234
  */
 void regs_set_kg_load(int16_t kg_load){ R.load_kg = kg_load; }
+
+/**
+ * @brief Actualiza la velocidad y dirección del viento
+ * 
+ * @param speed_cmps Velocidad en cm/s (m/s * 100). Ej.: 3.45 m/s -> 345
+ * @param dir_deg Dirección en grados 0-359 (0=Norte, 90=Este, 180=Sur, 270=Oeste)
+ */
+void regs_set_wind(uint16_t speed_cmps, uint16_t dir_deg) {
+  R.wind_speed_cmps = speed_cmps;
+  R.wind_dir_deg = (dir_deg >= 360) ? (dir_deg % 360) : dir_deg; // Normalizar 0-359
+}
 
 /**
  * @brief Incrementa el contador de muestras

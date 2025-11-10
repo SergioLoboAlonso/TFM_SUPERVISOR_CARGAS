@@ -11,12 +11,11 @@ Abstracción y orquestación de sensores para el firmware. Evita lógica en `mai
 
 ### Sensores disponibles
 
-1. **MPU6050Sensor** (`MPU6050Sensor.h`) — IMU para inclinometría (ángulos pitch/roll), acelerómetro, giroscopio y temperatura.
-2. **TemperatureSensor** (`TemperatureSensor.h`) — Sensor de temperatura (DS18B20 con OneWire/Dallas o MOCK).
-3. **AccelerometerSensor** (`AccelerometerSensor.h`) — Acelerómetro dedicado (deprecado: usar MPU6050).
-4. **LoadSensor** (`LoadSensor.h`) — Sensor de carga (HX711 + celda de carga) entrega gramos; Modbus expone centi‑kg.
+1. **MPU6050Sensor** (`MPU6050Sensor.h`) — **Sensor unificado IMU**: provee acelerómetro (3-ejes en mg), giroscopio (3-ejes en mdps), temperatura interna (en mc/centi-°C) y ángulos de inclinación pitch/roll (en cdeg). **Es el sensor principal para telemetría de inclinación y orientación.**
+2. **LoadSensor** (`LoadSensor.h`) — Sensor de carga (HX711 + celda de carga) entrega gramos; Modbus expone centi‑kg.
+3. **WindSpeedSensor** (`WindSpeedSensor.h`) — Anemómetro analógico (Adafruit 0–32.4 m/s, salida 0.4–2.0V). Se convierte linealmente a velocidad (m/s) y se expone como cm/s en Modbus. No incluye dirección (no hay veleta instalada).
 
-Los sensores 2–4 son stubs con modo MOCK para desarrollo sin hardware.
+**NOTA**: Los sensores dedicados `AccelerometerSensor` y `TemperatureSensor` han sido **eliminados** por redundancia. MPU6050 ya provee aceleración (superior a un acelerómetro mock) y temperatura interna (suficiente para la mayoría de aplicaciones). Si necesitas temperatura ambiente precisa (DS18B20), restaura `TemperatureSensor.h` desde el historial de Git.
 
 ## Configuración por compilación
 
@@ -24,14 +23,23 @@ Define en `platformio.ini` (sección `build_flags`) qué sensores activar:
 
 ```ini
 build_flags =
-  -DSENSORS_MPU_ENABLED=1       ; Habilita MPU6050
-  -DSENSORS_TEMP_ENABLED=0      ; Deshabilita temperatura
-  -DSENSORS_ACCEL_ENABLED=0     ; Deshabilita acelerómetro dedicado
+  -DSENSORS_MPU_ENABLED=1       ; Habilita MPU6050 (accel + gyro + temp + ángulos)
   -DSENSORS_LOAD_ENABLED=0      ; Deshabilita sensor de carga
+  -DSENSORS_WIND_ENABLED=0      ; Deshabilita sensor de viento
   -DSENSORS_USE_MOCK=0          ; 0=HW real, 1=datos sintéticos
+  
+  ; Calibración anemómetro analógico (si SENSORS_WIND_ENABLED=1)
+  -DWIND_SPEED_ANALOG_PIN=A0    ; Pin analógico lectura tensión anemómetro
+  -DWIND_VOLT_MIN=0.40          ; Voltaje mínimo (≈0 m/s)
+  -DWIND_VOLT_MAX=2.00          ; Voltaje máximo (≈32.4 m/s)
+  -DWIND_SPEED_MAX=32.40        ; Velocidad máxima nominal (m/s)
+  -DWIND_ADC_REF_V=5.00         ; Referencia ADC (tip. 5V)
+  -DWIND_SAMPLES_AVG=4          ; Promedio lecturas para suavizado
 ```
 
 Solo se compilan e instancian los sensores habilitados, ahorrando RAM/Flash.
+
+**NOTA**: Los flags `SENSORS_TEMP_ENABLED` y `SENSORS_ACCEL_ENABLED` están deprecados (sensores eliminados).
 
 ## Uso desde main.cpp
 

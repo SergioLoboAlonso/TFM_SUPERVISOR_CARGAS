@@ -13,6 +13,8 @@
 // - Temperatura: mc (centésimas de °C)
 // - Peso/Carga: gramos (g) — para precisión con int16_t (rango ±32.767 kg)
 // - Corriente: miliamperios (mA)
+// - Viento velocidad: cm/s (centímetros/segundo) — para precisión con uint16_t (rango 0..327.67 m/s)
+// - Viento dirección: grados (0-359, 0=Norte, 90=Este, 180=Sur, 270=Oeste)
 struct TelemetryDelta {
   // Flags de presencia para escritura selectiva
   bool has_angles = false;
@@ -21,6 +23,7 @@ struct TelemetryDelta {
   bool has_temp   = false;
   bool has_load   = false;  // Peso/carga en gramos
   bool has_current= false;  // Corriente eléctrica en mA
+  bool has_wind   = false;  // Velocidad y dirección del viento
   bool bump_sample= false;  // Solicita incrementar contador de muestras
 
   // Ángulos (mdeg)
@@ -45,6 +48,10 @@ struct TelemetryDelta {
   
   // Corriente eléctrica (mA, rango ±32.767 A con precisión de 1mA)
   int16_t current_ma = 0;
+  
+  // Viento (velocidad en cm/s, dirección en grados 0-359)
+  uint16_t wind_speed_cmps = 0;  // Velocidad en cm/s (m/s * 100)
+  uint16_t wind_dir_deg = 0;     // Dirección 0-359° (0=N, 90=E, 180=S, 270=W)
 };
 
 // Opcional: tipo de sensor, por si se requiere reportar capacidades
@@ -56,4 +63,5 @@ enum class SensorKind : uint8_t {
   Voltage         = 4,
   Accelerometer   = 5,
   Load            = 6,
+  WindSpeed       = 7,
 };

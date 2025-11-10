@@ -46,6 +46,8 @@ class ModbusMaster:
             'timeouts': 0,
             'exceptions': 0
         }
+        # Contadores por unidad para diagnósticos finos
+        self._timeouts_per_unit = {}
         
         self._connected = False
         logger.info(f"ModbusClient inicializado: {self.port} @ {self.baudrate} bps")
@@ -116,6 +118,7 @@ class ModbusMaster:
                 # Reintentar solo si es timeout y retry=True
                 if retry and ("Timeout" in str(result) or "No response" in str(result)):
                     self.stats['timeouts'] += 1
+                    self._timeouts_per_unit[unit_id] = self._timeouts_per_unit.get(unit_id, 0) + 1
                     time.sleep(0.01)  # Reducido de 50ms a 10ms
                     return self.read_holding_registers(unit_id, address, count, retry=False)
                 
@@ -157,20 +160,21 @@ class ModbusMaster:
             self.stats['tx_frames'] += 1
             result = self.client.read_input_registers(address, count, slave=unit_id)
             
-            logger.info(f"🔍 read_input_registers unit={unit_id} addr=0x{address:04X} count={count}")
-            logger.info(f"   result.isError()={result.isError()}, type={type(result)}")
+            logger.debug(f"🔍 read_input_registers unit={unit_id} addr=0x{address:04X} count={count}")
+            logger.debug(f"   result.isError()={result.isError()}, type={type(result)}")
             
             if result.isError():
                 logger.warning(f"❌ No response unit={unit_id} addr=0x{address:04X}: {result}")
                 if retry and ("Timeout" in str(result) or "No response" in str(result)):
                     self.stats['timeouts'] += 1
+                    self._timeouts_per_unit[unit_id] = self._timeouts_per_unit.get(unit_id, 0) + 1
                     time.sleep(0.01)  # Reducido de 50ms a 10ms
                     return self.read_input_registers(unit_id, address, count, retry=False)
                 self.stats['exceptions'] += 1
                 return None
             
             self.stats['rx_frames'] += 1
-            logger.info(f"✅ Received {len(result.registers)} registers: {result.registers[:5]}...")
+            logger.debug(f"✅ Received {len(result.registers)} registers: {result.registers[:5]}...")
             return result.registers
         
         except ModbusException as e:
@@ -442,7 +446,8 @@ class ModbusMaster:
         return {
             'rs485': bool(cap & 0x01),
             'mpu6050': bool(cap & 0x02),
-            'identify': bool(cap & 0x04)
+            'identify': bool(cap & 0x04),
+            'wind': bool(cap & 0x08)
         }
     
     def decode_status(self, status: int) -> dict:
@@ -459,5 +464,6 @@ class ModbusMaster:
             'port': self.port,
             'baudrate': self.baudrate,
             'connected': self.is_connected(),
-            **self.stats
+            **self.stats,
+            'per_unit_timeouts': {str(k): v for k, v in self._timeouts_per_unit.items()}
         }

@@ -222,6 +222,14 @@ function createTelemetryCards(unitIds) {
                                     <span>Z: <strong id="gyro-z-${unitId}">--</strong></span>
                                 </div>
                             </div>
+
+                            <!-- Viento (condicional) -->
+                            <div class="col-12" id="wind-block-${unitId}" style="display:none;">
+                                <div class="border rounded p-2 text-center">
+                                    <small class="text-muted d-block">💨 Viento</small>
+                                    <strong id="wind-speed-${unitId}">--</strong> m/s
+                                </div>
+                            </div>
                             
                             <!-- Sample counter -->
                             <div class="col-12 mt-2">
@@ -295,6 +303,15 @@ function handleTelemetryUpdate(data) {
     }
     
     if (tel.sample_count !== undefined) updateField(`sample-${unitId}`, tel.sample_count);
+
+    // Viento: si la velocidad está presente, mostrar bloque y actualizar valor
+    if (tel.wind_speed_mps !== undefined) {
+        const windBlock = document.getElementById(`wind-block-${unitId}`);
+        if (windBlock && windBlock.style.display === 'none') {
+            windBlock.style.display = 'block';
+        }
+        updateField(`wind-speed-${unitId}`, tel.wind_speed_mps.toFixed(2));
+    }
     
     // Timestamp
     if (data.timestamp) {

@@ -420,15 +420,17 @@ def api_polling_start():
     data = request.get_json() or {}
     unit_ids = data.get('unit_ids', [])
     interval_sec = data.get('interval_sec', Config.POLL_INTERVAL_SEC)
+    per_device_refresh_sec = data.get('per_device_refresh_sec', Config.PER_DEVICE_REFRESH_SEC)
     
     if not unit_ids:
         return jsonify({'error': 'unit_ids is required'}), 400
     
     try:
-        polling_service.start(unit_ids, interval_sec)
+        polling_service.start(unit_ids, interval_sec, per_device_refresh_sec)
         return jsonify({
             'status': 'started',
             'interval_sec': interval_sec,
+            'per_device_refresh_sec': per_device_refresh_sec,
             'devices': unit_ids
         })
     except Exception as e:

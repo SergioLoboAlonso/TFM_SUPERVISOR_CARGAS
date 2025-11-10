@@ -10,9 +10,6 @@
 
 #include "AngleCalculator.h"
 
-// Arduino.h ya define RAD_TO_DEG, no es necesario redefinirlo
-// #define RAD_TO_DEG (180.0f / PI)
-
 // -----------------------------
 // Constructor
 // -----------------------------

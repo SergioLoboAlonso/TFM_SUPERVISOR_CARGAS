@@ -42,7 +42,7 @@
 // (Opcional) fecha de build fija; puede automatizarse con extra_scripts de PlatformIO
 #ifndef FW_BUILD_DATE
   // Debe mantenerse sincronizada con el changelog o generarse automáticamente en cada build.
-  #define FW_BUILD_DATE "2025-10-24" // Fecha de compilación
+  #define FW_BUILD_DATE "2025-11-11" // Fecha de compilación
 #endif
 
 // Identidad por defecto (puede sobreescribirse con -D VENDOR_NAME=... y -D MODEL_NAME=...)
@@ -50,7 +50,7 @@
   #define VENDOR_NAME "LOBO-IoT" // Fabricante
 #endif
 #ifndef MODEL_NAME
-  #define MODEL_NAME  "Inclino_TX" // Modelo
+  #define MODEL_NAME  "Accel_TX" // Modelo
 #endif
 
 // Cadena formateada para impresión, p. ej.: "v1.0.0 (HW1.0.0) 2025-10-24"

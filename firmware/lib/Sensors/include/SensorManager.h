@@ -22,7 +22,7 @@ public:
   // Configuración global (por ahora vacía, reservada para futuro)
 
 private:
-  static const uint8_t MAX_SENSORS = 4;
+  static const uint8_t MAX_SENSORS = 4; // Capacidad máxima de sensores gestionados en un mismo dispositivo
   ISensor* sensors_[MAX_SENSORS];
   uint8_t  sensor_count_;
 

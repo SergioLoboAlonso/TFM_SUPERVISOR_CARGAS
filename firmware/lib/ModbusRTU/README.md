@@ -29,7 +29,7 @@ Escalas:
 | Holding | 0x0002 | HR_INFO_VERSION_HW | R | — | Versión HW (major<<8 | minor) |
 | Holding | 0x0003 | HR_INFO_VERSION_FW | R | — | Versión FW (major<<8 | minor) |
 | Holding | 0x0004 | HR_INFO_ID_UNIDAD | R | — | Unit ID efectivo |
-| Holding | 0x0005 | HR_INFO_CAPACIDADES | R | bitmask | Capacidades (RS485, MPU6050, IDENT) |
+| Holding | 0x0005 | HR_INFO_CAPACIDADES | R | bitmask | Capacidades (RS485, MPU6050, IDENT, WIND) |
 | Holding | 0x0006 | HR_INFO_UPTIME_S_LO | R | s (LSW) | Uptime segundos (parte baja) |
 | Holding | 0x0007 | HR_INFO_UPTIME_S_HI | R | s (MSW) | Uptime segundos (parte alta) |
 | Holding | 0x0008 | HR_INFO_ESTADO | R | bitmask | Estado dispositivo |
@@ -51,7 +51,9 @@ Escalas:
 | Input   | 0x0009 | IR_MED_MUESTRAS_LO | R | LSW | Contador muestras (parte baja) |
 | Input   | 0x000A | IR_MED_MUESTRAS_HI | R | MSW | Contador muestras (parte alta) |
 | Input   | 0x000B | IR_MED_FLAGS_CALIDAD | R | bitmask | Flags de calidad |
-| Input   | 0x000C | IR_MED_PESO_KG_CENTI | R | 0.01 kg | Peso/carga (ej.: 12.34 kg → 1234) |
+| Input   | 0x000C | IR_MED_PESO_KG | R | 0.01 kg | Peso/carga (ej.: 12.34 kg → 1234) |
+| Input   | 0x000D | IR_MED_WIND_SPEED_CMPS | R | 0.01 m/s | Velocidad del viento (m/s ×100) |
+| Input   | 0x000E | IR_MED_WIND_DIR_DEG | R | grados | Dirección del viento (0–359; 0 si no hay veleta) |
 | Holding | 0x0020 | HR_DIAG_TRAMAS_RX_OK | R | — | Tramas RX correctas |
 | Holding | 0x0021 | HR_DIAG_RX_CRC_ERROR | R | — | Tramas RX con CRC incorrecto |
 | Holding | 0x0022 | HR_DIAG_RX_EXCEPCIONES | R | — | Excepciones enviadas |

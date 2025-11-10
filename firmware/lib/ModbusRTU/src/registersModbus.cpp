@@ -48,7 +48,7 @@ static struct {
                          | DEV_CAP_WIND
 #endif
                          ); // Capacidades según build_flags (añade WIND si definido)
-                         
+
   uint16_t status      = DEV_STATUS_OK;          // Flags de estado
   uint16_t errors      = DEV_ERR_NONE;           // Flags de error
 
@@ -71,6 +71,7 @@ static struct {
   uint16_t save_write_seq = 0;             // Secuencia de escrituras en HR_CMD_GUARDAR
   uint16_t ident_secs  = 0;                      // Timeout de identify (segundos)
   uint16_t ident_write_seq = 0;                  // Secuencia de escrituras en HR_CMD_IDENT_SEGUNDOS
+  uint16_t poll_interval_ms = 100;               // Intervalo global de muestreo (ms)
 
   // Medidas
   int16_t  ang_x_mdeg  = 0;
@@ -86,6 +87,16 @@ static struct {
   uint16_t wind_speed_cmps = 0;                  // Velocidad viento en cm/s (m/s * 100)
   uint16_t wind_dir_deg = 0;                     // Dirección viento en grados (0-359)
   uint32_t sample_cnt  = 0;                      // Contador de muestras (32 bits)
+
+  // Estadísticas 5 s
+  // Viento (cm/s)
+  uint16_t wind_min_cmps = 0;
+  uint16_t wind_max_cmps = 0;
+  uint16_t wind_avg_cmps = 0;
+  // Aceleración (mg)
+  int16_t acc_x_min_mg = 0, acc_x_max_mg = 0, acc_x_avg_mg = 0;
+  int16_t acc_y_min_mg = 0, acc_y_max_mg = 0, acc_y_avg_mg = 0;
+  int16_t acc_z_min_mg = 0, acc_z_max_mg = 0, acc_z_avg_mg = 0;
 
   // Diagnóstico
   uint16_t rx_frames   = 0;                      // Tramas RX OK
@@ -277,6 +288,19 @@ bool regs_read_input(uint16_t addr, uint16_t count, uint16_t* out){//addr direcc
       case IR_MED_PESO_KG:          out[i] = (uint16_t)R.load_kg;  break;
       case IR_MED_WIND_SPEED_CMPS:  out[i] = R.wind_speed_cmps; break;
       case IR_MED_WIND_DIR_DEG:     out[i] = R.wind_dir_deg; break;
+  // Estadísticas de 5 s
+  case IR_STAT_WIND_MIN_CMPS:   out[i] = R.wind_min_cmps; break;
+  case IR_STAT_WIND_MAX_CMPS:   out[i] = R.wind_max_cmps; break;
+  case IR_STAT_WIND_AVG_CMPS:   out[i] = R.wind_avg_cmps; break;
+  case IR_STAT_ACC_X_MIN_mG:    out[i] = (uint16_t)R.acc_x_min_mg; break;
+  case IR_STAT_ACC_X_MAX_mG:    out[i] = (uint16_t)R.acc_x_max_mg; break;
+  case IR_STAT_ACC_X_AVG_mG:    out[i] = (uint16_t)R.acc_x_avg_mg; break;
+  case IR_STAT_ACC_Y_MIN_mG:    out[i] = (uint16_t)R.acc_y_min_mg; break;
+  case IR_STAT_ACC_Y_MAX_mG:    out[i] = (uint16_t)R.acc_y_max_mg; break;
+  case IR_STAT_ACC_Y_AVG_mG:    out[i] = (uint16_t)R.acc_y_avg_mg; break;
+  case IR_STAT_ACC_Z_MIN_mG:    out[i] = (uint16_t)R.acc_z_min_mg; break;
+  case IR_STAT_ACC_Z_MAX_mG:    out[i] = (uint16_t)R.acc_z_max_mg; break;
+  case IR_STAT_ACC_Z_AVG_mG:    out[i] = (uint16_t)R.acc_z_avg_mg; break;
       case IR_MED_MUESTRAS_LO:      out[i] = (uint16_t)(R.sample_cnt & 0xFFFF); break;
       case IR_MED_MUESTRAS_HI:      out[i] = (uint16_t)((R.sample_cnt>>16) & 0xFFFF); break;
       case IR_MED_FLAGS_CALIDAD:     out[i] = 0; break; // placeholder de calidad
@@ -328,6 +352,7 @@ bool regs_read_holding(uint16_t addr, uint16_t count, uint16_t* out){
       case HR_CMD_GUARDAR:         out[i] = R.save; break; // eco último valor
       case HR_CMD_IDENT_SEGUNDOS:  out[i] = R.ident_secs; break; // eco último valor
       case HR_CFG_ID_UNIDAD:       out[i] = R.unit_id;    break;
+  case HR_CFG_POLL_INTERVAL_MS:out[i] = R.poll_interval_ms; break;
 
       // Diagnóstico
       case HR_DIAG_TRAMAS_RX_OK:     out[i] = R.rx_frames;  break;
@@ -404,6 +429,15 @@ bool regs_write_holding(uint16_t addr, uint16_t value){
   case HR_CFG_ID_UNIDAD:
       if (value>=1 && value<=247){ R.unit_id = value; R.status |= DEV_STATUS_CFG_DIRTY; return true; }
       R.errors |= DEV_ERR_RANGE; return false;
+
+  case HR_CFG_POLL_INTERVAL_MS: {
+      // Acepta 10..5000 ms; 0 => aplica mínimo (10)
+      uint16_t v = value;
+      if (v < 10) v = 10;
+      if (v > 5000) v = 5000;
+      R.poll_interval_ms = v;
+      return true;
+    }
 
   case HR_CMD_IDENT_SEGUNDOS:
     R.ident_secs = value;  // la capa superior iniciará/parará el patrón BlinkIdent
@@ -578,6 +612,21 @@ void regs_set_wind(uint16_t speed_cmps, uint16_t dir_deg) {
   R.wind_dir_deg = (dir_deg >= 360) ? (dir_deg % 360) : dir_deg; // Normalizar 0-359
 }
 
+// Estadísticas: setters
+void regs_set_wind_stats(uint16_t min_cmps, uint16_t max_cmps, uint16_t avg_cmps){
+  R.wind_min_cmps = min_cmps;
+  R.wind_max_cmps = max_cmps;
+  R.wind_avg_cmps = avg_cmps;
+}
+
+void regs_set_accel_stats(int16_t x_max, int16_t x_min, int16_t x_avg,
+                          int16_t y_max, int16_t y_min, int16_t y_avg,
+                          int16_t z_max, int16_t z_min, int16_t z_avg){
+  R.acc_x_max_mg = x_max; R.acc_x_min_mg = x_min; R.acc_x_avg_mg = x_avg;
+  R.acc_y_max_mg = y_max; R.acc_y_min_mg = y_min; R.acc_y_avg_mg = y_avg;
+  R.acc_z_max_mg = z_max; R.acc_z_min_mg = z_min; R.acc_z_avg_mg = z_avg;
+}
+
 /**
  * @brief Incrementa el contador de muestras
  * 
@@ -637,5 +686,9 @@ void regs_set_error(uint16_t mask, bool enable){
 // Getter de Unit ID actual
 uint16_t regs_get_unit_id(){
   return R.unit_id;
+}
+
+uint16_t regs_get_cfg_poll_interval_ms(){
+  return R.poll_interval_ms;
 }
 

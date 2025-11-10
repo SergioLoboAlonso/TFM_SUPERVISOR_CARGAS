@@ -76,6 +76,7 @@ extern "C" {
 #endif
 #define HR_CMD_IDENT_SEGUNDOS  0x0013  // 40020 W    Start Identify: segundos (0=stop)
 #define HR_CFG_ID_UNIDAD       0x0014  // 40021 R/W  Unit ID (1..247) (persistente)
+#define HR_CFG_POLL_INTERVAL_MS 0x0015 // 40022 R/W  Intervalo global de muestreo (ms) para poll de sensores (min 10, max 5000)
 #define HR_CFG_RESERVED_END    0x001F  // reserva de 0x0015..0x001F
 
 // -----------------------------
@@ -97,6 +98,21 @@ extern "C" {
 #define IR_MED_PESO_KG         0x000C  // 30013 R  Peso/carga en kg (kg*100=no decimales)
 #define IR_MED_WIND_SPEED_CMPS 0x000D  // 30014 R  Velocidad viento en cm/s (m/s * 100)
 #define IR_MED_WIND_DIR_DEG    0x000E  // 30015 R  Dirección viento en grados (0-359)
+// Estadísticas de ventana deslizante de 5 s (tumbling) — min/max/avg
+#define IR_STAT_WIND_MIN_CMPS  0x000F  // 30016 R  Viento min (cm/s) ventana 5 s
+#define IR_STAT_WIND_MAX_CMPS  0x0010  // 30017 R  Viento max (cm/s) ventana 5 s
+#define IR_STAT_WIND_AVG_CMPS  0x0011  // 30018 R  Viento avg (cm/s) ventana 5 s
+
+#define IR_STAT_ACC_X_MIN_mG   0x0012  // 30019 R  Accel X min (mg) ventana 5 s
+#define IR_STAT_ACC_X_MAX_mG   0x0013  // 30020 R  Accel X max (mg) ventana 5 s
+#define IR_STAT_ACC_X_AVG_mG   0x0014  // 30021 R  Accel X avg (mg) ventana 5 s
+#define IR_STAT_ACC_Y_MIN_mG   0x0015  // 30022 R  Accel Y min (mg) ventana 5 s
+#define IR_STAT_ACC_Y_MAX_mG   0x0016  // 30023 R  Accel Y max (mg) ventana 5 s
+#define IR_STAT_ACC_Y_AVG_mG   0x0017  // 30024 R  Accel Y avg (mg) ventana 5 s
+#define IR_STAT_ACC_Z_MIN_mG   0x0018  // 30025 R  Accel Z min (mg) ventana 5 s
+#define IR_STAT_ACC_Z_MAX_mG   0x0019  // 30026 R  Accel Z max (mg) ventana 5 s
+#define IR_STAT_ACC_Z_AVG_mG   0x001A  // 30027 R  Accel Z avg (mg) ventana 5 s
+
 #define IR_RESERVED_END        0x001F  // reserva
 
 // -----------------------------
@@ -228,6 +244,14 @@ void regs_set_kg_load(int16_t kg_load);
 // - dir_deg: dirección en grados 0-359 (0=Norte, 90=Este, 180=Sur, 270=Oeste)
 void regs_set_wind(uint16_t speed_cmps, uint16_t dir_deg);
 
+// Estadísticas de 5 s: setters para publicar a los registros
+// Viento (cm/s)
+void regs_set_wind_stats(uint16_t min_cmps, uint16_t max_cmps, uint16_t avg_cmps);
+// Aceleración (mg) — orden: X(max,min,avg), Y(max,min,avg), Z(max,min,avg)
+void regs_set_accel_stats(int16_t x_max, int16_t x_min, int16_t x_avg,
+                          int16_t y_max, int16_t y_min, int16_t y_avg,
+                          int16_t z_max, int16_t z_min, int16_t z_avg);
+
 // Incrementa contador de muestras (32 bits expuesto como L/H en IR_MED_MUESTRAS_*)
 void regs_bump_sample_counter(void);
 
@@ -238,6 +262,9 @@ void regs_set_error (uint16_t mask, bool enable);
 
 // Consultas rápidas del estado
 uint16_t regs_get_unit_id();
+
+// Lectura de configuración desde registro Holding (intervalo global de muestreo)
+uint16_t regs_get_cfg_poll_interval_ms();
 
 #ifdef __cplusplus
 } // extern "C"

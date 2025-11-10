@@ -14,7 +14,7 @@
 #endif
 #ifndef FW_VERSION_MINOR
   // Se incrementa cuando se añaden funcionalidades compatibles.
-  #define FW_VERSION_MINOR 0 // Versión menor (compatible)
+  #define FW_VERSION_MINOR 1 // Versión menor (compatible)
 #endif
 #ifndef FW_VERSION_PATCH
   // Se ajusta en correcciones puntuales o builds de mantenimiento.

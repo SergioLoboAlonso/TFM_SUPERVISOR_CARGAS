@@ -33,7 +33,7 @@ class DataNormalizer:
             Dict con telemetría normalizada
         """
         if len(raw_regs) < 13:
-            raise ValueError(f"Se esperan 13 registros, recibidos {len(raw_regs)}")
+            raise ValueError(f"Se esperan >=13 registros base, recibidos {len(raw_regs)}")
         
         # Conversión de uint16 a int16 (complemento a 2)
         def to_int16(val: int) -> int:
@@ -43,7 +43,7 @@ class DataNormalizer:
         def to_uint32(lo: int, hi: int) -> int:
             return (hi << 16) | lo
         
-        return {
+        telemetry = {
             'angle_x_deg': to_int16(raw_regs[0]) / 100.0,
             'angle_y_deg': to_int16(raw_regs[1]) / 100.0,
             'temperature_c': to_int16(raw_regs[2]) / 100.0,
@@ -61,6 +61,60 @@ class DataNormalizer:
             'quality_flags': raw_regs[11],
             'load_kg': to_int16(raw_regs[12])
         }
+
+        # Ampliaciones opcionales (viento + estadísticas) si el bloque incluye más registros.
+        # Layout extendido (cuando se leen 27 registros):
+        # [13] wind_speed_cmps (int16, ×100 → cm/s)
+        # [14] wind_direction_deg (uint16)
+        # [15] wind_min_cmps
+        # [16] wind_max_cmps
+        # [17] wind_avg_cmps
+        # [18..26] accel stats (x_min, x_max, x_avg, y_min, y_max, y_avg, z_min, z_max, z_avg) en mG
+        if len(raw_regs) >= 15:  # viento actual presente (indices 13,14)
+            wind_speed_mps = raw_regs[13] / 100.0  # firmware expone cm/s *? (definido como cm/s ×100 ⇒ m/s = cm/s/100)
+            # Clarificar conversión: registro almacena cm/s *1 → se decidió escalar ×100 para resolución centi-cm/s.
+            # km/h = m/s * 3.6
+            wind_speed_kmh = wind_speed_mps * 3.6
+            telemetry['wind_speed_mps'] = wind_speed_mps
+            telemetry['wind_speed_kmh'] = wind_speed_kmh
+            telemetry['wind_direction_deg'] = raw_regs[14]
+        if len(raw_regs) >= 18:  # estadísticas de viento (min/max/avg)
+            wind_min_mps = raw_regs[15] / 100.0
+            wind_max_mps = raw_regs[16] / 100.0
+            wind_avg_mps = raw_regs[17] / 100.0
+            telemetry['wind_stats'] = {
+                'min_mps': wind_min_mps,
+                'max_mps': wind_max_mps,
+                'avg_mps': wind_avg_mps,
+                'min_kmh': wind_min_mps * 3.6,
+                'max_kmh': wind_max_mps * 3.6,
+                'avg_kmh': wind_avg_mps * 3.6
+            }
+        if len(raw_regs) >= 27:  # estadísticas acelerómetro completas
+            def mg_to_g(val: int) -> float:
+                return (val if val < 32768 else val - 65536) / 1000.0
+            accel_stats_regs = raw_regs[18:27]
+            
+            if len(accel_stats_regs) == 9:
+                x_min, x_max, x_avg, y_min, y_max, y_avg, z_min, z_max, z_avg = accel_stats_regs
+                telemetry['acceleration_stats'] = {
+                    'x_g': {
+                        'min': mg_to_g(x_min),
+                        'max': mg_to_g(x_max),
+                        'avg': mg_to_g(x_avg)
+                    },
+                    'y_g': {
+                        'min': mg_to_g(y_min),
+                        'max': mg_to_g(y_max),
+                        'avg': mg_to_g(y_avg)
+                    },
+                    'z_g': {
+                        'min': mg_to_g(z_min),
+                        'max': mg_to_g(z_max),
+                        'avg': mg_to_g(z_avg)
+                    }
+                }
+        return telemetry
     
     @staticmethod
     def decode_alias(alias_len: int, alias_regs: list) -> str:

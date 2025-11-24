@@ -5,7 +5,7 @@
 #include <Arduino.h>
 #include "ISensor.h"
 #include <registersModbus.h>
-#include <RollingStats.h>
+
 
 class SensorManager {
 public:
@@ -29,10 +29,7 @@ private:
 
   void applyTelemetry(const TelemetryDelta& t);
 
-  // Ventanas de 5 segundos para estadísticas (solo aceleración y viento según requerimiento)
-  RollingStats5s wind_stats_;
-  RollingStats5s acc_x_stats_;
-  RollingStats5s acc_y_stats_;
-  RollingStats5s acc_z_stats_;
+  // RollingStats eliminadas: RAM insuficiente en Arduino UNO
+  // Estadísticas se calcularán en edge layer
   uint32_t last_poll_adjust_ms_ = 0; // para ajustar el ritmo global
 };

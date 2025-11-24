@@ -453,6 +453,30 @@ def api_polling_status():
 
 
 # ============================================================================
+# API REST - WIND TELEMETRY
+# ============================================================================
+
+@app.route('/api/wind/<int:unit_id>', methods=['GET'])
+def api_wind(unit_id):
+    """Última telemetría de viento para un dispositivo (si disponible)."""
+    if not polling_service:
+        return jsonify({'error': 'PollingService not initialized'}), 500
+    data = polling_service.get_last_wind(unit_id)
+    if not data:
+        return jsonify({'error': 'No wind data'}), 404
+    return jsonify({'status': 'ok', **data})
+
+@app.route('/api/stats/<int:unit_id>', methods=['GET'])
+def api_stats(unit_id):
+    """Últimas estadísticas de ventanas (viento y aceleración) si están disponibles."""
+    if not polling_service:
+        return jsonify({'error': 'PollingService not initialized'}), 500
+    data = polling_service.get_last_stats(unit_id)
+    if not data:
+        return jsonify({'error': 'No stats available'}), 404
+    return jsonify({'status': 'ok', **data})
+
+# ============================================================================
 # API REST - HEALTH
 # ============================================================================
 

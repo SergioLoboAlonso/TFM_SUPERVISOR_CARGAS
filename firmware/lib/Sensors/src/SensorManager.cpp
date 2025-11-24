@@ -38,23 +38,10 @@ void SensorManager::pollAll(uint32_t nowMs){
 
 void SensorManager::applyTelemetry(const TelemetryDelta& t){
   // Vuelca campos presentes a los registros Modbus
+  
   if (t.has_accel){
     regs_set_acc_mg(t.acc_x_mg, t.acc_y_mg, t.acc_z_mg);
-    // Ventana 5 s: publicar min/max/avg al rotar la ventana
-    int16_t x_min, x_max, x_avg;
-    int16_t y_min, y_max, y_avg;
-    int16_t z_min, z_max, z_avg;
-    bool rot_x = acc_x_stats_.onSample(millis(), t.acc_x_mg, x_min, x_max, x_avg);
-    bool rot_y = acc_y_stats_.onSample(millis(), t.acc_y_mg, y_min, y_max, y_avg);
-    bool rot_z = acc_z_stats_.onSample(millis(), t.acc_z_mg, z_min, z_max, z_avg);
-    if (rot_x || rot_y || rot_z){
-      // Asumimos que rotan a la vez porque comparten inicio y now; si no, igualmente publicamos la ventana que cerró
-      regs_set_accel_stats(
-        x_max, x_min, x_avg,
-        y_max, y_min, y_avg,
-        z_max, z_min, z_avg
-      );
-    }
+    // Estadísticas: se calcularán en edge layer (RAM insuficiente en UNO)
   }
   if (t.has_gyro){
     regs_set_gyr_mdps(t.gyr_x_mdps, t.gyr_y_mdps, t.gyr_z_mdps);
@@ -94,14 +81,7 @@ void SensorManager::applyTelemetry(const TelemetryDelta& t){
   if (t.has_wind){
     // Velocidad viento cm/s y dirección grados 0-359 (ya validados por el sensor)
     regs_set_wind(t.wind_speed_cmps, t.wind_dir_deg);
-    // Ventana 5 s viento: publicar min/max/avg cuando se cierra ventana
-    int16_t w_min, w_max, w_avg;
-    if (wind_stats_.onSample(millis(), (int16_t)t.wind_speed_cmps, w_min, w_max, w_avg)){
-      if (w_min < 0) w_min = 0; // asegurar no-negativo para cm/s
-      if (w_max < 0) w_max = 0;
-      if (w_avg < 0) w_avg = 0;
-      regs_set_wind_stats((uint16_t)w_min, (uint16_t)w_max, (uint16_t)w_avg);
-    }
+    // Estadísticas: se calcularán en edge layer (RAM insuficiente en UNO)
   }
   if (t.bump_sample){
     regs_bump_sample_counter();

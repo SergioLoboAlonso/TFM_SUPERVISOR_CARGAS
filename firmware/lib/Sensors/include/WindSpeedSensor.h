@@ -27,13 +27,12 @@
 #define WIND_ADC_REF_V 5.00f  // Referencia ADC (UNO/Nano típicamente 5V)
 #endif
 #ifndef WIND_SAMPLES_AVG
-#define WIND_SAMPLES_AVG 4    // Promediar varias lecturas para suavizar
+#define WIND_SAMPLES_AVG 4    // Promediar varias lecturas seguidas para reducir posible ruido o errores
 #endif
 
 class WindSpeedSensor : public ISensor {
 public:
-  explicit WindSpeedSensor(uint8_t speed_analog_pin = WIND_SPEED_ANALOG_PIN,
-                           uint16_t sample_interval_ms = 1000)
+  explicit WindSpeedSensor(uint8_t speed_analog_pin = WIND_SPEED_ANALOG_PIN, uint16_t sample_interval_ms = 1000)
     : speed_analog_pin_(speed_analog_pin),
       sample_interval_ms_(sample_interval_ms),
       last_sample_ms_(0),
@@ -51,9 +50,9 @@ public:
 #else
     // Configurar entrada analógica para velocidad
     pinMode(speed_analog_pin_, INPUT);
-  last_sample_ms_ = millis();
-  available_ = true;
-  return true;
+    last_sample_ms_ = millis();
+    available_ = true;
+    return true;
 #endif
   }
 
@@ -94,8 +93,8 @@ public:
     // Mapear linealmente a velocidad (m/s)
     float speed_mps = (v - WIND_VOLT_MIN) * (WIND_SPEED_MAX / (WIND_VOLT_MAX - WIND_VOLT_MIN));
     
-  // Convertir a cm/s
-  out.wind_speed_cmps = (uint16_t)(speed_mps * 100.0f);
+    // Convertir a cm/s
+    out.wind_speed_cmps = (uint16_t)(speed_mps * 100.0f);
     last_sample_ms_ = nowMs;
 #endif
     
@@ -106,42 +105,9 @@ public:
 
   bool isAvailable() const override { return available_; }
   
-  // No aplica para variante analógica
-  void incrementPulseCount() {}
-
 private:
-  uint8_t speed_analog_pin_;
-  uint8_t dir_pin_;
+  uint8_t  speed_analog_pin_;
   uint16_t sample_interval_ms_;
   uint32_t last_sample_ms_;
-  uint8_t speed_analog_pin_;
-  
-  /**
-   * @brief Lee la dirección del viento desde veleta analógica resistiva
-  
-    };
-
-// -----------------------------------------------------------------------------
-/*
-// En main.cpp o donde instancies el sensor:
-
-static WindSpeedSensor* g_wind_sensor = nullptr;
-
-void wind_speed_isr() {
-  if (g_wind_sensor) {
-    g_wind_sensor->incrementPulseCount();
-  }
-}
-
-void setup() {
-  // ... otros setup ...
-  
-  g_wind_sensor = &sensor_wind0;  // tu instancia global
-  sensorManager.registerSensor(g_wind_sensor);
-  sensorManager.beginAll();
-  
-  // Configurar interrupción en pin digital (ej: pin 2 = INT0 en UNO)
-  attachInterrupt(digitalPinToInterrupt(WIND_SPEED_PIN), wind_speed_isr, FALLING);
-}
-*/
-
+  bool     available_;
+};

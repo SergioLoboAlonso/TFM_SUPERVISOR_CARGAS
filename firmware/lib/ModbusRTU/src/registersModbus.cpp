@@ -21,9 +21,18 @@
 // Defaults de compilación
 // -----------------------------
 // Estas macros pueden inyectarse desde platformio.ini (build_flags) para personalizar
-// UnitID y versiones HW/FW en tiempo de compilación.
+// configuraciones específicas del dispositivo en tiempo de compilación:
+//
+// - UNIT_ID: Dirección Modbus del dispositivo (1..247, default=10)
+// - DEFAULT_POLL_INTERVAL_MS: Intervalo de muestreo por defecto en ms
+//                             (definido en platformio.ini, default=100ms)
+//                             Se puede modificar en runtime via HR_CFG_POLL_INTERVAL_MS
+//
 #ifndef UNIT_ID
   #define UNIT_ID 10      // Unit ID por defecto (1..247)
+#endif
+#ifndef DEFAULT_POLL_INTERVAL_MS
+  #define DEFAULT_POLL_INTERVAL_MS 100  // Intervalo de muestreo por defecto (ms)
 #endif
 // Versionado ahora proviene de firmware_version.h (FW_VERSION_*, HW_REV)
 
@@ -71,7 +80,7 @@ static struct {
   uint16_t save_write_seq = 0;             // Secuencia de escrituras en HR_CMD_GUARDAR
   uint16_t ident_secs  = 0;                      // Timeout de identify (segundos)
   uint16_t ident_write_seq = 0;                  // Secuencia de escrituras en HR_CMD_IDENT_SEGUNDOS
-  uint16_t poll_interval_ms = 100;               // Intervalo global de muestreo (ms)
+  uint16_t poll_interval_ms = DEFAULT_POLL_INTERVAL_MS;  // Intervalo global de muestreo (ms)
 
   // Medidas
   int16_t  ang_x_mdeg  = 0;

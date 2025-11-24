@@ -174,13 +174,13 @@ function createTelemetryCards(unitIds) {
                     <div class="card-body">
                         <div class="row g-2">
                             <!-- Ángulos -->
-                            <div class="col-6">
+                            <div class="col-6" id="angle-x-block-${unitId}">
                                 <div class="border rounded p-2 text-center">
                                     <small class="text-muted d-block">Ángulo X</small>
                                     <strong id="angle-x-${unitId}">--</strong>°
                                 </div>
                             </div>
-                            <div class="col-6">
+                            <div class="col-6" id="angle-y-block-${unitId}">
                                 <div class="border rounded p-2 text-center">
                                     <small class="text-muted d-block">Ángulo Y</small>
                                     <strong id="angle-y-${unitId}">--</strong>°
@@ -188,7 +188,7 @@ function createTelemetryCards(unitIds) {
                             </div>
                             
                             <!-- Temperatura -->
-                            <div class="col-12">
+                            <div class="col-12" id="temp-block-${unitId}">
                                 <div class="border rounded p-2 text-center">
                                     <small class="text-muted d-block">🌡️ Temperatura</small>
                                     <strong id="temp-${unitId}">--</strong>°C
@@ -196,7 +196,7 @@ function createTelemetryCards(unitIds) {
                             </div>
                             
                             <!-- Carga -->
-                            <div class="col-12">
+                            <div class="col-12" id="load-block-${unitId}">
                                 <div class="border rounded p-2 text-center">
                                     <small class="text-muted d-block">⚖️ Carga</small>
                                     <strong id="load-${unitId}">--</strong> kg
@@ -204,7 +204,7 @@ function createTelemetryCards(unitIds) {
                             </div>
                             
                             <!-- Acelerómetro -->
-                            <div class="col-12">
+                            <div class="col-12" id="accel-block-${unitId}">
                                 <small class="text-muted">Aceleración (g)</small>
                                 <div class="d-flex justify-content-between">
                                     <span>X: <strong id="accel-x-${unitId}">--</strong></span>
@@ -214,7 +214,7 @@ function createTelemetryCards(unitIds) {
                             </div>
                             
                             <!-- Giroscopio -->
-                            <div class="col-12">
+                            <div class="col-12" id="gyro-block-${unitId}">
                                 <small class="text-muted">Giroscopio (°/s)</small>
                                 <div class="d-flex justify-content-between">
                                     <span>X: <strong id="gyro-x-${unitId}">--</strong></span>
@@ -227,7 +227,17 @@ function createTelemetryCards(unitIds) {
                             <div class="col-12" id="wind-block-${unitId}" style="display:none;">
                                 <div class="border rounded p-2 text-center">
                                     <small class="text-muted d-block">💨 Viento</small>
-                                    <strong id="wind-speed-${unitId}">--</strong> m/s
+                                    <div class="d-flex justify-content-center gap-2 flex-wrap">
+                                        <span><strong id="wind-speed-kmh-${unitId}">--</strong> km/h</span>
+                                        <span class="text-muted" style="font-size:0.75rem;">(<span id="wind-speed-${unitId}">--</span> m/s)</span>
+                                    </div>
+                                    <div id="wind-stats-${unitId}" class="mt-2" style="display:none; font-size:0.8rem;">
+                                        <div class="d-flex justify-content-around">
+                                            <span>min <strong id="wind-min-kmh-${unitId}">--</strong></span>
+                                            <span>max <strong id="wind-max-kmh-${unitId}">--</strong></span>
+                                            <span>avg <strong id="wind-avg-kmh-${unitId}">--</strong></span>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
                             
@@ -311,6 +321,25 @@ function handleTelemetryUpdate(data) {
             windBlock.style.display = 'block';
         }
         updateField(`wind-speed-${unitId}`, tel.wind_speed_mps.toFixed(2));
+        if (tel.wind_speed_kmh !== undefined) {
+            updateField(`wind-speed-kmh-${unitId}`, tel.wind_speed_kmh.toFixed(2));
+        }
+    }
+
+    // Estadísticas de viento
+    if (tel.wind_stats) {
+        const statsDiv = document.getElementById(`wind-stats-${unitId}`);
+        if (statsDiv && statsDiv.style.display === 'none') statsDiv.style.display = 'block';
+        if (tel.wind_stats.min_kmh !== undefined) updateField(`wind-min-kmh-${unitId}`, tel.wind_stats.min_kmh.toFixed(2));
+        if (tel.wind_stats.max_kmh !== undefined) updateField(`wind-max-kmh-${unitId}`, tel.wind_stats.max_kmh.toFixed(2));
+        if (tel.wind_stats.avg_kmh !== undefined) updateField(`wind-avg-kmh-${unitId}`, tel.wind_stats.avg_kmh.toFixed(2));
+    }
+
+    // Estadísticas de aceleración (mostrar en tooltip adicional / future container)
+    if (tel.acceleration_stats) {
+        // Opcional: log de evento para inspección
+        const ax = tel.acceleration_stats;
+        logEvent(`📈 Accel stats U${unitId} X[min=${ax.x_g.min.toFixed(2)} max=${ax.x_g.max.toFixed(2)} avg=${ax.x_g.avg.toFixed(2)}]`, 'info');
     }
     
     // Timestamp
@@ -320,6 +349,14 @@ function handleTelemetryUpdate(data) {
     }
     
     monitoredDevices[unitId].lastUpdate = Date.now();
+
+    // Mostrar/Ocultar bloques según campos presentes
+    toggleBlockVisibility(`angle-x-block-${unitId}`, tel.angle_x_deg !== undefined);
+    toggleBlockVisibility(`angle-y-block-${unitId}`, tel.angle_y_deg !== undefined);
+    toggleBlockVisibility(`temp-block-${unitId}`, tel.temperature_c !== undefined);
+    toggleBlockVisibility(`load-block-${unitId}`, tel.load_kg !== undefined);
+    toggleBlockVisibility(`accel-block-${unitId}`, tel.acceleration !== undefined);
+    toggleBlockVisibility(`gyro-block-${unitId}`, tel.gyroscope !== undefined);
 }
 
 function markDeviceOffline(unitId) {
@@ -335,6 +372,12 @@ function updateField(elementId, value) {
     if (elem) {
         elem.textContent = value;
     }
+}
+
+function toggleBlockVisibility(blockId, visible) {
+    const block = document.getElementById(blockId);
+    if (!block) return;
+    block.style.display = visible ? '' : 'none';
 }
 
 // ============================================================================

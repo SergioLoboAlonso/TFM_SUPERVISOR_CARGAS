@@ -19,12 +19,20 @@ class PollingService:
     # Direcciones de Input Registers (telemetría)
     IR_TELEMETRY_START = 0x0000
     IR_TELEMETRY_COUNT = 13  # Base (MPU+load)
+    # Extensiones:
+    # +2 viento actual (speed, direction)
+    # +3 estadísticas viento (min/max/avg)
+    # +9 estadísticas aceleración (x/y/z min/max/avg)
+    IR_TOTAL_WITH_WIND_AND_STATS = 13 + 2 + 3 + 9  # 27
     MIN_INTERVAL_SEC = 0.2  # Evita saturar el bus/CPU con intervalos demasiado bajos
     
     def __init__(self, modbus_master: ModbusMaster, device_manager: DeviceManager):
         self.modbus = modbus_master
         self.device_mgr = device_manager
         self.normalizer = DataNormalizer()
+
+        # Cache último paquete de telemetría por unit_id
+        self._last_telemetry: dict[int, dict] = {}
         
         # Estado del polling
         self._active = False
@@ -184,6 +192,8 @@ class PollingService:
                         if telemetry_data.get('status') == 'ok':
                             self._next_allowed_poll_ts[unit_id] = 0.0
                             self._consec_errors[unit_id] = 0
+                            # Guardar último paquete
+                            self._last_telemetry[unit_id] = telemetry_data
                         else:
                             # Aumentar contador y aplicar backoff adaptativo
                             self._consec_errors[unit_id] = self._consec_errors.get(unit_id, 0) + 1
@@ -227,6 +237,43 @@ class PollingService:
         
         logger.info("Saliendo del bucle de polling")
     
+    def get_last_wind(self, unit_id: int) -> Optional[dict]:
+        """Retorna último paquete de viento para unit_id (o None si no hay)."""
+        data = self._last_telemetry.get(unit_id)
+        if not data or data.get('status') != 'ok':
+            return None
+        telem = data.get('telemetry', {})
+        if 'wind_speed_mps' not in telem:
+            return None
+        return {
+            'unit_id': unit_id,
+            'wind_speed_mps': telem.get('wind_speed_mps'),
+            'wind_speed_kmh': telem.get('wind_speed_kmh'),
+            'wind_direction_deg': telem.get('wind_direction_deg'),
+            'timestamp': data.get('timestamp')
+        }
+
+    def get_last_stats(self, unit_id: int) -> Optional[dict]:
+        """Retorna últimas estadísticas (viento y aceleración) si disponibles."""
+        data = self._last_telemetry.get(unit_id)
+        if not data or data.get('status') != 'ok':
+            return None
+        telem = data.get('telemetry', {})
+        has_any = ('wind_stats' in telem) or ('acceleration_stats' in telem)
+        if not has_any:
+            return None
+        payload = {
+            'unit_id': unit_id,
+            'timestamp': data.get('timestamp')
+        }
+        if 'wind_stats' in telem:
+            payload['wind_stats'] = telem['wind_stats']
+            if 'wind_speed_kmh' in telem:
+                payload['current_wind_kmh'] = telem['wind_speed_kmh']
+        if 'acceleration_stats' in telem:
+            payload['acceleration_stats'] = telem['acceleration_stats']
+        return payload
+    
     def _read_telemetry(self, unit_id: int) -> Optional[dict]:
         """
         Lee telemetría de un dispositivo.
@@ -237,55 +284,140 @@ class PollingService:
         Returns:
             Dict con telemetría normalizada o None si error
         """
-        # Determinar cuántos registros leer según capacidades (añadir viento si aplica)
-        read_count = self.IR_TELEMETRY_COUNT
+        # Seleccionar estrategia de lectura según capacidades
         device = self.device_mgr.get_device(unit_id)
-        if device and isinstance(device.capabilities, list) and ('Wind' in device.capabilities):
-            read_count += 2  # 0x000D..0x000E: viento (cm/s, dir)
+        caps = set(device.capabilities) if device and isinstance(device.capabilities, list) else set()
+        has_wind = 'Wind' in caps
+        has_mpu = 'MPU6050' in caps
 
-        # Leer Input Registers (0x04)
-        raw_regs = self.modbus.read_input_registers(
-            unit_id,
-            self.IR_TELEMETRY_START,
-            read_count,
-            retry=True
-        )
-        
-        # DEBUG: Log de registros crudos
-        logger.info(f"📊 UnitID {unit_id} raw_regs ({len(raw_regs) if raw_regs else 0}): {raw_regs}")
-        
-        if not raw_regs or len(raw_regs) < self.IR_TELEMETRY_COUNT:
-            logger.warning(f"No se pudo leer telemetría de unit {unit_id}")
-            self.device_mgr.update_device_status(unit_id, success=False)
-            
-            # Emitir evento de error
-            device = self.device_mgr.get_device(unit_id)
-            return {
-                'unit_id': unit_id,
-                'alias': device.alias if device else f"Unit {unit_id}",
-                'timestamp': datetime.now().isoformat(),
-                'status': 'error',
-                'error': 'timeout_or_crc_error'
-            }
-        
-        # Normalizar datos
+        # Utilidades locales
+        def to_uint32(lo: int, hi: int) -> int:
+            return ((hi & 0xFFFF) << 16) | (lo & 0xFFFF)
+
         try:
+            # Caso 1: solo viento → ampliar ventana para incluir estadísticas (0x0009..0x0011 ⇒ 9 registros)
+            if has_wind and not has_mpu:
+                regs = self.modbus.read_input_registers(unit_id, 0x0009, 9, retry=True)
+
+                logger.info(
+                    f"📊 UnitID {unit_id} wind-only raw window (9 regs) @0x0009: {regs}"
+                )
+
+                if not regs or len(regs) < 6:  # mínimo para valores actuales
+                    logger.warning(f"No se pudo leer telemetría (wind-only) de unit {unit_id}")
+                    self.device_mgr.update_device_status(unit_id, success=False)
+                    return {
+                        'unit_id': unit_id,
+                        'alias': device.alias if device else f"Unit {unit_id}",
+                        'timestamp': datetime.now().isoformat(),
+                        'status': 'error',
+                        'error': 'timeout_or_crc_error'
+                    }
+
+                wind_speed_mps = regs[4] / 100.0
+                telemetry = {
+                    'sample_count': to_uint32(regs[0], regs[1]),
+                    'wind_speed_mps': wind_speed_mps,
+                    'wind_speed_kmh': wind_speed_mps * 3.6,
+                    'wind_direction_deg': regs[5]
+                }
+                if len(regs) >= 9:
+                    wind_min_mps = regs[6] / 100.0
+                    wind_max_mps = regs[7] / 100.0
+                    wind_avg_mps = regs[8] / 100.0
+                    telemetry['wind_stats'] = {
+                        'min_mps': wind_min_mps,
+                        'max_mps': wind_max_mps,
+                        'avg_mps': wind_avg_mps,
+                        'min_kmh': wind_min_mps * 3.6,
+                        'max_kmh': wind_max_mps * 3.6,
+                        'avg_kmh': wind_avg_mps * 3.6
+                    }
+
+                logger.info(
+                    f"🌬️ unit {unit_id} wind-only: speed={telemetry['wind_speed_mps']:.2f} m/s ({telemetry['wind_speed_kmh']:.2f} km/h), dir={telemetry['wind_direction_deg']}°"
+                )
+                if 'wind_stats' in telemetry:
+                    ws = telemetry['wind_stats']
+                    logger.info(
+                        f"📈 wind stats unit {unit_id}: min={ws['min_mps']:.2f} m/s max={ws['max_mps']:.2f} m/s avg={ws['avg_mps']:.2f} m/s"
+                    )
+
+                self.device_mgr.update_device_status(unit_id, success=True)
+                return {
+                    'unit_id': unit_id,
+                    'alias': device.alias if device else f"Unit {unit_id}",
+                    'timestamp': datetime.now().isoformat(),
+                    'telemetry': telemetry,
+                    'status': 'ok'
+                }
+
+            # Caso 2: solo MPU → leer bloque base (13)
+            if has_mpu and not has_wind:
+                raw_regs = self.modbus.read_input_registers(unit_id, self.IR_TELEMETRY_START, self.IR_TELEMETRY_COUNT, retry=True)
+                logger.info(f"📊 UnitID {unit_id} mpu-only raw ({len(raw_regs) if raw_regs else 0}): {raw_regs}")
+
+                if not raw_regs or len(raw_regs) < self.IR_TELEMETRY_COUNT:
+                    logger.warning(f"No se pudo leer telemetría (mpu-only) de unit {unit_id}")
+                    self.device_mgr.update_device_status(unit_id, success=False)
+                    return {
+                        'unit_id': unit_id,
+                        'alias': device.alias if device else f"Unit {unit_id}",
+                        'timestamp': datetime.now().isoformat(),
+                        'status': 'error',
+                        'error': 'timeout_or_crc_error'
+                    }
+
+                telemetry = self.normalizer.normalize_telemetry(raw_regs)
+                self.device_mgr.update_device_status(unit_id, success=True)
+                return {
+                    'unit_id': unit_id,
+                    'alias': device.alias if device else f"Unit {unit_id}",
+                    'timestamp': datetime.now().isoformat(),
+                    'telemetry': telemetry,
+                    'status': 'ok'
+                }
+
+            # Caso 3: ambos → leer bloque extendido (incluir estadísticas si disponibles)
+            # Intentar leer el máximo esperado (27). Si el firmware aún no soporta todos, se adaptará.
+            read_count = self.IR_TOTAL_WITH_WIND_AND_STATS
+            raw_regs = self.modbus.read_input_registers(unit_id, self.IR_TELEMETRY_START, read_count, retry=True)
+            
+            logger.info(f"📊 UnitID {unit_id} both raw ({len(raw_regs) if raw_regs else 0}/{read_count} solicitados)")
+
+            if not raw_regs or len(raw_regs) < self.IR_TELEMETRY_COUNT:
+                logger.warning(f"No se pudo leer telemetría (both/default) de unit {unit_id}")
+                self.device_mgr.update_device_status(unit_id, success=False)
+                return {
+                    'unit_id': unit_id,
+                    'alias': device.alias if device else f"Unit {unit_id}",
+                    'timestamp': datetime.now().isoformat(),
+                    'status': 'error',
+                    'error': 'timeout_or_crc_error'
+                }
+
             telemetry = self.normalizer.normalize_telemetry(raw_regs)
-            # Si hay datos de viento (registros 13 y 14), añadir campos normalizados
-            if len(raw_regs) >= self.IR_TELEMETRY_COUNT + 2:
-                try:
-                    wind_speed_mps = raw_regs[13] / 100.0
-                    wind_dir_deg = raw_regs[14]
-                    telemetry['wind_speed_mps'] = wind_speed_mps
-                    telemetry['wind_direction_deg'] = wind_dir_deg
-                except Exception as _:
-                    pass
-            
-            # Obtener info del dispositivo
-            device = self.device_mgr.get_device(unit_id)
+            if 'wind_speed_mps' in telemetry:
+                logger.info(
+                    f"🌬️ unit {unit_id} both: speed={telemetry['wind_speed_mps']:.2f} m/s ({telemetry.get('wind_speed_kmh', 0):.2f} km/h), dir={telemetry.get('wind_direction_deg')}°"
+                )
+            if 'wind_stats' in telemetry:
+                ws = telemetry['wind_stats']
+                logger.info(
+                    f"📈 wind stats unit {unit_id}: min={ws['min_mps']:.2f} m/s max={ws['max_mps']:.2f} m/s avg={ws['avg_mps']:.2f} m/s"
+                )
+            if 'acceleration_stats' in telemetry:
+                axs = telemetry['acceleration_stats']
+                logger.info(
+                    "🧪 accel stats unit %d: X(min=%.3f max=%.3f avg=%.3f) Y(min=%.3f max=%.3f avg=%.3f) Z(min=%.3f max=%.3f avg=%.3f)" % (
+                        unit_id,
+                        axs['x_g']['min'], axs['x_g']['max'], axs['x_g']['avg'],
+                        axs['y_g']['min'], axs['y_g']['max'], axs['y_g']['avg'],
+                        axs['z_g']['min'], axs['z_g']['max'], axs['z_g']['avg']
+                    )
+                )
+
             self.device_mgr.update_device_status(unit_id, success=True)
-            
-            # Construir payload completo
             return {
                 'unit_id': unit_id,
                 'alias': device.alias if device else f"Unit {unit_id}",
@@ -293,9 +425,9 @@ class PollingService:
                 'telemetry': telemetry,
                 'status': 'ok'
             }
-        
+
         except Exception as e:
-            logger.error(f"Error al normalizar telemetría de unit {unit_id}: {e}")
+            logger.error(f"Error al leer/normalizar telemetría de unit {unit_id}: {e}")
             self.device_mgr.update_device_status(unit_id, success=False)
             return None
     

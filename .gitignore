@@ -1,5 +1,6 @@
 # Python
 .venv/
+venv/
 __pycache__/
 *.pyc
 
@@ -19,6 +20,9 @@ build/
 # Docker / Infra
 infra/mosquitto/data/
 *.log
+
+# Archivos de entorno
+.env
 
 # SO / miscelánea
 .DS_Store

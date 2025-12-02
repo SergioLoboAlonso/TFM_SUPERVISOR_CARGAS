@@ -1,7 +1,27 @@
 """
-Modbus RTU Master para pymodbus.
-El Master (maestro) inicia las peticiones a los Slaves (esclavos/dispositivos).
-Maneja conexión serie, lectura/escritura de registros, timeouts y excepciones.
+============================================================================
+MODBUS RTU MASTER - Capa de Comunicación Serial
+============================================================================
+
+Responsabilidades:
+    - Cliente Modbus RTU (Maestro que inicia peticiones)
+    - Gestión de puerto serie RS-485
+    - Lectura/escritura de registros (funciones 0x03, 0x04, 0x06, 0x10)
+    - Manejo de timeouts, reintentos y excepciones
+    - Estadísticas de comunicación (TX/RX, errores)
+
+Protocolo Modbus RTU:
+    - Capa física: RS-485 half-duplex @ 115200 bps
+    - Formato: 8 bits, sin paridad, 1 bit de parada (8N1)
+    - CRC16 para detección de errores
+    - Delimitación por silencio (3.5 caracteres)
+
+Nota Importante:
+    El Master mantiene UN SOLO puerto serie abierto.
+    NO se reconecta entre dispositivos diferentes.
+    Cada trama especifica el UnitID del esclavo destino.
+
+============================================================================
 """
 from typing import Optional, List
 import time
@@ -44,7 +64,8 @@ class ModbusMaster:
             'rx_frames': 0,
             'crc_errors': 0,
             'timeouts': 0,
-            'exceptions': 0
+            'exceptions': 0,
+            'errors': 0  # Contador genérico de errores
         }
         # Contadores por unidad para diagnósticos finos
         self._timeouts_per_unit = {}
@@ -447,7 +468,8 @@ class ModbusMaster:
             'rs485': bool(cap & 0x01),
             'mpu6050': bool(cap & 0x02),
             'identify': bool(cap & 0x04),
-            'wind': bool(cap & 0x08)
+            'wind': bool(cap & 0x08),
+            'load': bool(cap & 0x10)  # Bit 4: Load (HX711)
         }
     
     def decode_status(self, status: int) -> dict:

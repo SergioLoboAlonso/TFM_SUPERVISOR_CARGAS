@@ -1,6 +1,32 @@
 """
-Data Normalizer: convierte registros Modbus (escalados) a unidades físicas.
-Según especificación en docs/edge_specification.md sección 5.1
+============================================================================
+DATA NORMALIZER - Conversión de Datos Modbus a Unidades Físicas
+============================================================================
+
+Responsabilidades:
+    1. Conversión de registros Modbus (int16/uint16) a valores físicos
+    2. Decodificación de strings ASCII (alias, vendor, product)
+    3. Codificación de strings para escritura Modbus
+    4. Interpretación de bitmasks (capacidades, estado, errores)
+
+Tabla de Conversiones (según especificación firmware):
+    +------------------+-------------+------------+------------------+
+    | Magnitud         | Unidad Modbus| Escala    | Unidad Física   |
+    +------------------+-------------+------------+------------------+
+    | Ángulo X/Y       | mdeg        | ×100       | grados (°)      |
+    | Temperatura      | mc          | ×100       | °Celsius        |
+    | Aceleración      | mg          | ×1000      | g (gravedad)    |
+    | Giroscopio       | mdps        | ×1000      | °/s             |
+    | Viento           | cm/s ×100   | ×100       | m/s (y km/h)    |
+    | Muestras         | 2x uint16   | LSW+MSW    | uint32          |
+    +------------------+-------------+------------+------------------+
+
+Formato ASCII (alias, vendor, product):
+    - Empaquetado: 2 bytes por registro (big-endian)
+    - MSB primero: registro = (char1 << 8) | char2
+    - Ejemplo: 'AB' → 0x4142
+
+============================================================================
 """
 from typing import Dict, Any
 
@@ -9,7 +35,7 @@ class DataNormalizer:
     """Normaliza datos de registros Modbus a unidades físicas"""
     
     @staticmethod
-    def normalize_telemetry(raw_regs: list) -> Dict[str, Any]:
+    def normalize_telemetry(raw_regs: list, capabilities: list = None) -> Dict[str, Any]:
         """
         Normaliza telemetría desde Input Registers (IR).
         
@@ -28,9 +54,10 @@ class DataNormalizer:
                 [10] IR_MED_MUESTRAS_HI (uint16, MSW)
                 [11] IR_MED_FLAGS_CALIDAD (uint16, bitmask)
                 [12] IR_MED_PESO_KG (int16, kg sin decimales)
+            capabilities: Lista de capabilities del dispositivo (ej: ['RS485', 'MPU6050', 'Load'])
         
         Returns:
-            Dict con telemetría normalizada
+            Dict con telemetría normalizada (solo campos de sensores habilitados)
         """
         if len(raw_regs) < 13:
             raise ValueError(f"Se esperan >=13 registros base, recibidos {len(raw_regs)}")
@@ -43,34 +70,53 @@ class DataNormalizer:
         def to_uint32(lo: int, hi: int) -> int:
             return (hi << 16) | lo
         
+        # Normalizar capabilities para comparación case-insensitive
+        caps = [c.lower() for c in (capabilities or [])]
+        has_mpu = 'mpu6050' in caps
+        has_load = 'load' in caps
+        has_wind = 'wind' in caps
+        
         telemetry = {
-            'angle_x_deg': to_int16(raw_regs[0]) / 100.0,
-            'angle_y_deg': to_int16(raw_regs[1]) / 100.0,
-            'temperature_c': to_int16(raw_regs[2]) / 100.0,
-            'acceleration': {
+            'sample_count': to_uint32(raw_regs[9], raw_regs[10]),
+            'quality_flags': raw_regs[11]
+        }
+        
+        # Solo incluir datos de MPU6050 si tiene la capability
+        if has_mpu:
+            telemetry['angle_x_deg'] = to_int16(raw_regs[0]) / 100.0
+            telemetry['angle_y_deg'] = to_int16(raw_regs[1]) / 100.0
+            telemetry['temperature_c'] = to_int16(raw_regs[2]) / 100.0
+            telemetry['acceleration'] = {
                 'x_g': to_int16(raw_regs[3]) / 1000.0,
                 'y_g': to_int16(raw_regs[4]) / 1000.0,
                 'z_g': to_int16(raw_regs[5]) / 1000.0
-            },
-            'gyroscope': {
+            }
+            telemetry['gyroscope'] = {
                 'x_dps': to_int16(raw_regs[6]) / 1000.0,
                 'y_dps': to_int16(raw_regs[7]) / 1000.0,
                 'z_dps': to_int16(raw_regs[8]) / 1000.0
-            },
-            'sample_count': to_uint32(raw_regs[9], raw_regs[10]),
-            'quality_flags': raw_regs[11],
-            'load_kg': to_int16(raw_regs[12])
-        }
+            }
+        
+        # Solo incluir datos de Load si tiene la capability
+        if has_load:
+            # Firmware almacena centi-kg (1 ckg = 10g): load_g / 10 → ckg
+            # Para mostrar en gramos: ckg * 10 → g
+            # Para mostrar en kg: ckg / 100 → kg
+            telemetry['load_g'] = to_int16(raw_regs[12]) * 10.0  # ckg → gramos
+            telemetry['load_kg'] = to_int16(raw_regs[12]) / 100.0  # ckg → kg
 
-        # Ampliaciones opcionales (viento + estadísticas) si el bloque incluye más registros.
-        # Layout extendido (cuando se leen 27 registros):
+        # Ampliaciones opcionales (viento + estadísticas + carga) si el bloque incluye más registros.
+        # Layout extendido (cuando se leen 28 registros):
         # [13] wind_speed_cmps (int16, ×100 → cm/s)
         # [14] wind_direction_deg (uint16)
         # [15] wind_min_cmps
         # [16] wind_max_cmps
         # [17] wind_avg_cmps
         # [18..26] accel stats (x_min, x_max, x_avg, y_min, y_max, y_avg, z_min, z_max, z_avg) en mG
-        if len(raw_regs) >= 15:  # viento actual presente (indices 13,14)
+        # [27] load_max_100_kg (int16, kg×100) - máximo de las últimas 100 muestras
+        
+        # Viento: solo si tiene la capability Wind
+        if has_wind and len(raw_regs) >= 15:  # viento actual presente (indices 13,14)
             wind_speed_mps = raw_regs[13] / 100.0  # firmware expone cm/s *? (definido como cm/s ×100 ⇒ m/s = cm/s/100)
             # Clarificar conversión: registro almacena cm/s *1 → se decidió escalar ×100 para resolución centi-cm/s.
             # km/h = m/s * 3.6
@@ -78,7 +124,8 @@ class DataNormalizer:
             telemetry['wind_speed_mps'] = wind_speed_mps
             telemetry['wind_speed_kmh'] = wind_speed_kmh
             telemetry['wind_direction_deg'] = raw_regs[14]
-        if len(raw_regs) >= 18:  # estadísticas de viento (min/max/avg)
+        
+        if has_wind and len(raw_regs) >= 18:  # estadísticas de viento (min/max/avg)
             wind_min_mps = raw_regs[15] / 100.0
             wind_max_mps = raw_regs[16] / 100.0
             wind_avg_mps = raw_regs[17] / 100.0
@@ -90,7 +137,9 @@ class DataNormalizer:
                 'max_kmh': wind_max_mps * 3.6,
                 'avg_kmh': wind_avg_mps * 3.6
             }
-        if len(raw_regs) >= 27:  # estadísticas acelerómetro completas
+        
+        # Estadísticas de acelerómetro: solo si tiene MPU6050
+        if has_mpu and len(raw_regs) >= 27:  # estadísticas acelerómetro completas
             def mg_to_g(val: int) -> float:
                 return (val if val < 32768 else val - 65536) / 1000.0
             accel_stats_regs = raw_regs[18:27]
@@ -114,6 +163,12 @@ class DataNormalizer:
                         'avg': mg_to_g(z_avg)
                     }
                 }
+        
+        # Máximo de 100 muestras de carga (índice 27): solo si tiene capability Load
+        if has_load and len(raw_regs) >= 28:
+            load_max_100_raw = raw_regs[27]
+            telemetry['load_max_100_kg'] = to_int16(load_max_100_raw) / 100.0
+        
         return telemetry
     
     @staticmethod
@@ -220,6 +275,7 @@ class DataNormalizer:
                 Bit 1: MPU6050
                 Bit 2: Identify
                 Bit 3: Wind (anemómetro analógico)
+                Bit 4: Load (sensor de carga HX711)
         
         Returns:
             Lista de strings con capacidades activas
@@ -233,6 +289,8 @@ class DataNormalizer:
             capabilities.append("Identify")
         if cap_reg & (1 << 3):
             capabilities.append("Wind")
+        if cap_reg & (1 << 4):
+            capabilities.append("Load")
         return capabilities
     
     @staticmethod

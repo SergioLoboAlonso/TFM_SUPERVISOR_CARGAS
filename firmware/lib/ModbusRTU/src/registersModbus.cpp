@@ -56,7 +56,10 @@ static struct {
 #if defined(SENSORS_WIND_ENABLED) && SENSORS_WIND_ENABLED
                          | DEV_CAP_WIND
 #endif
-                         ); // Capacidades según build_flags (añade WIND si definido)
+#if defined(SENSORS_LOAD_ENABLED) && SENSORS_LOAD_ENABLED
+                         | DEV_CAP_LOAD
+#endif
+                         ); // Capacidades según build_flags (añade WIND, LOAD si definidos)
 
   uint16_t status      = DEV_STATUS_OK;          // Flags de estado
   uint16_t errors      = DEV_ERR_NONE;           // Flags de error
@@ -81,6 +84,9 @@ static struct {
   uint16_t ident_secs  = 0;                      // Timeout de identify (segundos)
   uint16_t ident_write_seq = 0;                  // Secuencia de escrituras en HR_CMD_IDENT_SEGUNDOS
   uint16_t poll_interval_ms = DEFAULT_POLL_INTERVAL_MS;  // Intervalo global de muestreo (ms)
+  // Calibración de carga (HX711)
+  uint16_t load_cal_factor_deci = 4200;       // factor de calibración *10 (p. ej. 420.0 -> 4200)
+  uint16_t load_cal_write_seq = 0;            // secuencia de escrituras para cambio de factor
 
   // Medidas
   int16_t  ang_x_mdeg  = 0;
@@ -93,6 +99,11 @@ static struct {
   int16_t  gyr_y_mdps  = 0;
   int16_t  gyr_z_mdps  = 0;
   int16_t  load_kg     = 0;                      // Peso/carga en kg (kg*100=no decimales)
+  // Historial/estadística: máximo de las últimas 100 muestras de carga
+  int16_t  load_hist[100] = {0};
+  uint8_t  load_hist_idx  = 0;   // próximo índice a escribir (ring buffer)
+  uint8_t  load_hist_cnt  = 0;   // nº válido de muestras (<=100)
+  int16_t  load_max_100   = 0;   // máximo de la ventana deslizante (kg*100)
   uint16_t wind_speed_cmps = 0;                  // Velocidad viento en cm/s (m/s * 100)
   uint16_t wind_dir_deg = 0;                     // Dirección viento en grados (0-359)
   uint32_t sample_cnt  = 0;                      // Contador de muestras (32 bits)
@@ -297,6 +308,7 @@ bool regs_read_input(uint16_t addr, uint16_t count, uint16_t* out){//addr direcc
       case IR_MED_PESO_KG:          out[i] = (uint16_t)R.load_kg;  break;
       case IR_MED_WIND_SPEED_CMPS:  out[i] = R.wind_speed_cmps; break;
       case IR_MED_WIND_DIR_DEG:     out[i] = R.wind_dir_deg; break;
+      case IR_STAT_LOAD_MAX_KG:      out[i] = (uint16_t)R.load_max_100; break;
   // Estadísticas de 5 s
   case IR_STAT_WIND_MIN_CMPS:   out[i] = R.wind_min_cmps; break;
   case IR_STAT_WIND_MAX_CMPS:   out[i] = R.wind_max_cmps; break;
@@ -362,6 +374,7 @@ bool regs_read_holding(uint16_t addr, uint16_t count, uint16_t* out){
       case HR_CMD_IDENT_SEGUNDOS:  out[i] = R.ident_secs; break; // eco último valor
       case HR_CFG_ID_UNIDAD:       out[i] = R.unit_id;    break;
   case HR_CFG_POLL_INTERVAL_MS:out[i] = R.poll_interval_ms; break;
+      case HR_LOAD_CAL_FACTOR_DECI:out[i] = R.load_cal_factor_deci; break;
 
       // Diagnóstico
       case HR_DIAG_TRAMAS_RX_OK:     out[i] = R.rx_frames;  break;
@@ -452,6 +465,16 @@ bool regs_write_holding(uint16_t addr, uint16_t value){
     R.ident_secs = value;  // la capa superior iniciará/parará el patrón BlinkIdent
     R.ident_write_seq++;   // marca evento de escritura (re-trigger incluso si valor igual)
       return true;
+
+  case HR_LOAD_CAL_FACTOR_DECI: {
+      // Aceptar 100..20000 (10.0 .. 2000.0) para evitar valores absurdos
+      uint16_t v = value;
+      if (v < 100) v = 100;
+      if (v > 20000) v = 20000;
+      R.load_cal_factor_deci = v;
+      R.load_cal_write_seq++;
+      return true;
+    }
 
   case HR_CMD_GUARDAR:
     // Claves de control: 0xA55A=save-to-EEPROM
@@ -565,6 +588,11 @@ uint16_t regs_get_save_write_seq(){
   return R.save_write_seq;
 }
 
+// Secuencias de escritura para calibración de carga (factor)
+uint16_t regs_get_load_cal_write_seq(){
+  return R.load_cal_write_seq;
+}
+
 // -----------------------------
 // Hooks de actualización desde otras capas
 // -----------------------------
@@ -603,12 +631,39 @@ void regs_set_acc_mg(int16_t x, int16_t y, int16_t z){ R.acc_x_mg=x; R.acc_y_mg=
  */
 void regs_set_gyr_mdps(int16_t x, int16_t y, int16_t z){ R.gyr_x_mdps=x; R.gyr_y_mdps=y; R.gyr_z_mdps=z; }
 
+
+static inline void update_load_stats(int16_t kg_load);
+
 /**
  * @brief Actualiza la medida de peso/carga
  * 
  * @param kg_load Peso en kg (int16). Ej.: 12.34 kg -> 1234
  */
-void regs_set_kg_load(int16_t kg_load){ R.load_kg = kg_load; }
+void regs_set_kg_load(int16_t kg_load){ R.load_kg = kg_load; update_load_stats(kg_load); }
+// Actualización extendida: registrar en buffer y mantener máximo de últimas 100
+static inline void update_load_stats(int16_t kg_load){
+  int16_t overwritten = R.load_hist[R.load_hist_idx];
+  R.load_hist[R.load_hist_idx] = kg_load;
+  if (R.load_hist_cnt < 100) R.load_hist_cnt++;
+  R.load_hist_idx = (uint8_t)((R.load_hist_idx + 1) % 100);
+
+  if (R.load_hist_cnt == 1){
+    R.load_max_100 = kg_load;
+    return;
+  }
+  if (kg_load >= R.load_max_100){
+    R.load_max_100 = kg_load;
+    return;
+  }
+  // Si acabamos de sobreescribir el valor máximo, recomputar escaneando
+  if (overwritten == R.load_max_100){
+    int16_t m = R.load_hist[0];
+    for (uint8_t i = 1; i < R.load_hist_cnt; ++i){
+      if (R.load_hist[i] > m) m = R.load_hist[i];
+    }
+    R.load_max_100 = m;
+  }
+}
 
 /**
  * @brief Actualiza la velocidad y dirección del viento

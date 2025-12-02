@@ -79,6 +79,10 @@ extern "C" {
 #define HR_CFG_POLL_INTERVAL_MS 0x0015 // 40022 R/W  Intervalo global de muestreo (ms) para poll de sensores (min 10, max 5000)
 #define HR_CFG_RESERVED_END    0x001F  // reserva de 0x0015..0x001F
 
+// Calibración sensor de carga (Holding 4xxxx, lectura/escritura)
+// - HR_LOAD_CAL_FACTOR_DECI: factor de calibración del HX711 en décimas (p. ej. 420.0 -> 4200)
+#define HR_LOAD_CAL_FACTOR_DECI   0x0017  // 40024 R/W Factor de calibración * 10 (int16)
+
 // -----------------------------
 // BLOQUE 3: Medidas (Input 3xxxx, sólo lectura por maestro)
 // Dirección base 0 (equivalente 30001…)
@@ -112,6 +116,9 @@ extern "C" {
 #define IR_STAT_ACC_Z_MIN_mG   0x0018  // 30025 R  Accel Z min (mg) ventana 5 s
 #define IR_STAT_ACC_Z_MAX_mG   0x0019  // 30026 R  Accel Z max (mg) ventana 5 s
 #define IR_STAT_ACC_Z_AVG_mG   0x001A  // 30027 R  Accel Z avg (mg) ventana 5 s
+
+// Estadística de carga (peso): máximo de las últimas 100 muestras
+#define IR_STAT_LOAD_MAX_KG    0x001B  // 30028 R  Máximo de las últimas 100 muestras (kg*100)
 
 #define IR_RESERVED_END        0x001F  // reserva
 
@@ -175,6 +182,7 @@ enum {
   DEV_CAP_MPU6050 = (1u<<1), // Integra sensor MPU‑6050
   DEV_CAP_IDENT   = (1u<<2), // Soporta Identify (parpadeo LED)
   DEV_CAP_WIND    = (1u<<3), // Anemómetro analógico de velocidad de viento
+  DEV_CAP_LOAD    = (1u<<4), // Sensor de carga/peso HX711
 };
 
 enum {
@@ -265,6 +273,10 @@ uint16_t regs_get_unit_id();
 
 // Lectura de configuración desde registro Holding (intervalo global de muestreo)
 uint16_t regs_get_cfg_poll_interval_ms();
+
+// Secuencias de escritura para calibración de carga (detección de eventos)
+uint16_t regs_get_load_cal_write_seq();
+
 
 #ifdef __cplusplus
 } // extern "C"

@@ -1,6 +1,43 @@
 """
-Polling Service: servicio en background para lectura automática de telemetría.
-Actualiza dispositivos y emite eventos vía WebSocket.
+============================================================================
+POLLING SERVICE - Muestreo Automático de Telemetría
+============================================================================
+
+Responsabilidades:
+    1. Thread background para lectura continua de dispositivos
+    2. Estrategia round-robin para distribución equitativa
+    3. Backoff adaptativo para dispositivos offline
+    4. Emisión de eventos WebSocket en tiempo real
+    5. Lectura selectiva según capacidades del dispositivo
+
+Arquitectura del Polling:
+    
+    PollingService (thread)
+        │
+        ├── Tick cada ~200ms (ajustable según num dispositivos)
+        │
+        ├── Round-robin: selecciona 1 dispositivo por tick
+        │      cursor = (cursor + 1) % len(devices)
+        │
+        ├── Lectura Modbus (estrategia según capacidades):
+        │      • Wind-only: 9 regs (0x0009-0x0011)
+        │      • MPU-only: 13 regs (0x0000-0x000C)
+        │      • Both: 27 regs (0x0000-0x001A)
+        │
+        ├── Normalización (DataNormalizer)
+        │
+        ├── Emisión WebSocket
+        │      on_telemetry_callback(data)
+        │
+        └── Backoff adaptativo en errores:
+               1er error: 5s, 2do: 10s, 3ro: 20s, ... max 60s
+
+Estrategia de Backoff:
+    - Evita saturar dispositivos offline con peticiones continuas
+    - Exponencial con cap: 5s, 10s, 20s, 40s, 60s (máximo)
+    - Reset automático al recibir respuesta exitosa
+
+============================================================================
 """
 import threading
 import time
@@ -274,6 +311,11 @@ class PollingService:
             payload['acceleration_stats'] = telem['acceleration_stats']
         return payload
     
+    @staticmethod
+    def _to_int16(val: int) -> int:
+        """Convierte uint16 a int16 (complemento a 2)"""
+        return val if val < 32768 else val - 65536
+    
     def _read_telemetry(self, unit_id: int) -> Optional[dict]:
         """
         Lee telemetría de un dispositivo.
@@ -289,13 +331,50 @@ class PollingService:
         caps = set(device.capabilities) if device and isinstance(device.capabilities, list) else set()
         has_wind = 'Wind' in caps
         has_mpu = 'MPU6050' in caps
+        has_load = 'Load' in caps
 
         # Utilidades locales
         def to_uint32(lo: int, hi: int) -> int:
             return ((hi & 0xFFFF) << 16) | (lo & 0xFFFF)
 
         try:
-            # Caso 1: solo viento → ampliar ventana para incluir estadísticas (0x0009..0x0011 ⇒ 9 registros)
+            # Caso 1: solo Load (sin MPU ni Wind) → OPTIMIZADO: leer solo 4 registros necesarios
+            # IR[9-10]: sample_count (LSW+MSW), IR[11]: quality_flags, IR[12]: load_kg
+            if has_load and not has_mpu and not has_wind:
+                raw_regs = self.modbus.read_input_registers(unit_id, 0x0009, 4, retry=True)
+                logger.info(f"📊 UnitID {unit_id} load-only raw (4 regs @0x0009): {raw_regs}")
+
+                if not raw_regs or len(raw_regs) < 4:
+                    logger.warning(f"No se pudo leer telemetría (load-only) de unit {unit_id}")
+                    self.device_mgr.update_device_status(unit_id, success=False)
+                    return {
+                        'unit_id': unit_id,
+                        'alias': device.alias if device else f"Unit {unit_id}",
+                        'timestamp': datetime.now().isoformat(),
+                        'status': 'error',
+                        'error': 'timeout_or_crc_error'
+                    }
+
+                # Construir telemetría manualmente (más eficiente que llamar al normalizer con array parcial)
+                telemetry = {
+                    'sample_count': to_uint32(raw_regs[0], raw_regs[1]),
+                    'quality_flags': raw_regs[2],
+                    'load_g': self._to_int16(raw_regs[3]) * 10.0,  # ckg → gramos
+                    'load_kg': self._to_int16(raw_regs[3]) / 100.0  # ckg → kg
+                }
+                logger.info(
+                    f"⚖️ unit {unit_id} load-only: {telemetry['load_g']:.2f}g, samples={telemetry['sample_count']}"
+                )
+                self.device_mgr.update_device_status(unit_id, success=True)
+                return {
+                    'unit_id': unit_id,
+                    'alias': device.alias if device else f"Unit {unit_id}",
+                    'timestamp': datetime.now().isoformat(),
+                    'telemetry': telemetry,
+                    'status': 'ok'
+                }
+
+            # Caso 2: solo viento → ampliar ventana para incluir estadísticas (0x0009..0x0011 ⇒ 9 registros)
             if has_wind and not has_mpu:
                 regs = self.modbus.read_input_registers(unit_id, 0x0009, 9, retry=True)
 
@@ -352,12 +431,16 @@ class PollingService:
                     'status': 'ok'
                 }
 
-            # Caso 2: solo MPU → leer bloque base (13)
+            # Caso 3: solo MPU (sin Load ni Wind) → leer solo MPU data (12 regs, sin load)
+            # O si tiene MPU+Load pero NO Wind → leer 13 regs (todo el bloque base)
             if has_mpu and not has_wind:
-                raw_regs = self.modbus.read_input_registers(unit_id, self.IR_TELEMETRY_START, self.IR_TELEMETRY_COUNT, retry=True)
-                logger.info(f"📊 UnitID {unit_id} mpu-only raw ({len(raw_regs) if raw_regs else 0}): {raw_regs}")
+                # Si NO tiene Load, solo necesitamos 12 registros (0x0000-0x000B)
+                # Si tiene Load, necesitamos 13 registros (0x0000-0x000C)
+                count = 13 if has_load else 12
+                raw_regs = self.modbus.read_input_registers(unit_id, self.IR_TELEMETRY_START, count, retry=True)
+                logger.info(f"📊 UnitID {unit_id} mpu{'+ load' if has_load else ''}-only raw ({len(raw_regs) if raw_regs else 0}/{count}): {raw_regs}")
 
-                if not raw_regs or len(raw_regs) < self.IR_TELEMETRY_COUNT:
+                if not raw_regs or len(raw_regs) < count:
                     logger.warning(f"No se pudo leer telemetría (mpu-only) de unit {unit_id}")
                     self.device_mgr.update_device_status(unit_id, success=False)
                     return {
@@ -368,7 +451,7 @@ class PollingService:
                         'error': 'timeout_or_crc_error'
                     }
 
-                telemetry = self.normalizer.normalize_telemetry(raw_regs)
+                telemetry = self.normalizer.normalize_telemetry(raw_regs, device.capabilities)
                 self.device_mgr.update_device_status(unit_id, success=True)
                 return {
                     'unit_id': unit_id,
@@ -378,15 +461,15 @@ class PollingService:
                     'status': 'ok'
                 }
 
-            # Caso 3: ambos → leer bloque extendido (incluir estadísticas si disponibles)
-            # Intentar leer el máximo esperado (27). Si el firmware aún no soporta todos, se adaptará.
+            # Caso 4: tiene Wind (con o sin MPU/Load) → leer bloque extendido completo (27 regs)
+            # Incluye: base(13) + wind(2) + wind_stats(3) + accel_stats(9) = 27 registros
             read_count = self.IR_TOTAL_WITH_WIND_AND_STATS
             raw_regs = self.modbus.read_input_registers(unit_id, self.IR_TELEMETRY_START, read_count, retry=True)
             
-            logger.info(f"📊 UnitID {unit_id} both raw ({len(raw_regs) if raw_regs else 0}/{read_count} solicitados)")
+            logger.info(f"📊 UnitID {unit_id} with-wind raw ({len(raw_regs) if raw_regs else 0}/{read_count})")
 
             if not raw_regs or len(raw_regs) < self.IR_TELEMETRY_COUNT:
-                logger.warning(f"No se pudo leer telemetría (both/default) de unit {unit_id}")
+                logger.warning(f"No se pudo leer telemetría (wind) de unit {unit_id}")
                 self.device_mgr.update_device_status(unit_id, success=False)
                 return {
                     'unit_id': unit_id,
@@ -396,7 +479,7 @@ class PollingService:
                     'error': 'timeout_or_crc_error'
                 }
 
-            telemetry = self.normalizer.normalize_telemetry(raw_regs)
+            telemetry = self.normalizer.normalize_telemetry(raw_regs, device.capabilities)
             if 'wind_speed_mps' in telemetry:
                 logger.info(
                     f"🌬️ unit {unit_id} both: speed={telemetry['wind_speed_mps']:.2f} m/s ({telemetry.get('wind_speed_kmh', 0):.2f} km/h), dir={telemetry.get('wind_direction_deg')}°"

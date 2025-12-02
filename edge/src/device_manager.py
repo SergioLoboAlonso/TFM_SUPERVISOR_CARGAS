@@ -1,5 +1,32 @@
 """
-Device Manager: gestión de dispositivos Modbus, discovery, caché de identidad.
+============================================================================
+DEVICE MANAGER - Gestión de Dispositivos Modbus
+============================================================================
+
+Responsabilidades:
+    1. Discovery: Escaneo automático de dispositivos en el bus RS-485
+    2. Identidad: Lectura y caché de vendor, product, alias, versiones
+    3. Comandos: Identify (LED), cambio de UnitID, guardado EEPROM
+    4. Estado: Tracking de dispositivos online/offline/degraded
+
+Arquitectura:
+    DeviceManager
+        ├── Diccionario de dispositivos {unit_id: Device}
+        ├── ModbusMaster (lectura/escritura Modbus)
+        └── DataNormalizer (conversión de datos)
+
+Mapa de Registros Modbus (conforme a firmware Arduino):
+    Holding Registers (HR) - Configuración e Info:
+        0x0000-0x0009: Bloque de identidad (vendor, product, versiones)
+        0x0014: UnitID configurable
+        0x0012: Comando SAVE (0xA55A → guardar en EEPROM)
+        0x0030-0x0050: Alias ASCII (hasta 64 caracteres)
+    
+    Input Registers (IR) - Telemetría:
+        0x0000-0x000C: Medidas base (ángulos, temp, accel, gyro)
+        0x000D-0x001A: Extensiones (viento + estadísticas)
+
+============================================================================
 """
 from typing import Dict, Optional, List
 from datetime import datetime

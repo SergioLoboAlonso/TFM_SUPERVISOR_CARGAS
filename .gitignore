@@ -16,7 +16,7 @@ docs/edge_specification.md
 build/
 *.elf
 *.hex
-
+.gitignore
 # Docker / Infra
 infra/mosquitto/data/
 *.log
@@ -33,3 +33,7 @@ edge_backup/
 # AI agent instructions (personalización local)
 .github/copilot-instructions.md
 TFM_SUPERVISOR_CARGAS.code-workspace
+edge_backup_migration_complete_20251124_232239
+
+# Documentación privada para defensa (no subir al repo)
+edge/Private_Docs/

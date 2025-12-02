@@ -1,6 +1,22 @@
 """
-Flask App principal - Edge Layer.
-Rutas web y API REST para gestión de dispositivos Modbus.
+============================================================================
+EDGE LAYER - Aplicación Principal Flask
+============================================================================
+
+Responsabilidades:
+    1. Servidor web Flask con interfaz HTML (Dashboard, Config, Polling)
+    2. API REST para operaciones CRUD de dispositivos Modbus
+    3. WebSocket (Socket.IO) para telemetría en tiempo real
+    4. Orquestación de servicios (Modbus, DeviceManager, PollingService)
+    
+Arquitectura:
+    Flask App → DeviceManager → ModbusMaster → Serial RS-485 → Arduino
+                     ↓
+              PollingService (thread) → WebSocket → Frontend
+    
+Autor: Sergio Lobo Alonso - TFM UNIR
+Fecha: Noviembre 2025
+============================================================================
 """
 from flask import Flask, render_template, jsonify, request
 from flask_socketio import SocketIO, emit
@@ -36,34 +52,46 @@ discovery_state = {
 
 
 def init_modbus():
-    """Inicializa el Modbus Master RTU y servicios"""
+    """
+    Inicializa la stack completa de comunicación Modbus RTU y servicios.
+    
+    Secuencia de inicialización:
+        1. ModbusMaster → Abre puerto serie RS-485
+        2. DeviceManager → Gestiona identidad y comandos de dispositivos
+        3. PollingService → Thread background para telemetría continua
+        4. Callbacks → Conecta eventos de polling con WebSocket
+    
+    Returns:
+        bool: True si inicialización exitosa, False si error
+    """
     global modbus_master, device_manager, polling_service
     
-    # Determinar puerto (manual o autodetección)
+    # PASO 1: Validar configuración del puerto serie
     port = Config.MODBUS_PORT
     if port == 'auto':
         logger.warning("Puerto configurado como 'auto', pero autodetección deshabilitada por usuario")
-        logger.warning("Configura MODBUS_PORT en .env con el puerto correcto (ej: /dev/tty.usbmodem5A300455411)")
+        logger.warning("Configura MODBUS_PORT en .env con el puerto correcto (ej: /dev/ttyACM0)")
         return False
     
     logger.info(f"Inicializando Modbus Master en {port} @ {Config.MODBUS_BAUDRATE} baud")
     
-    # Crear instancias
+    # PASO 2: Crear y conectar el Modbus Master (cliente serie RTU)
     modbus_master = ModbusMaster(port=port, baudrate=Config.MODBUS_BAUDRATE)
     
-    # Conectar al puerto serie
     if not modbus_master.connect():
         logger.error("No se pudo conectar al puerto serie. Verifica el cable y el puerto.")
         return False
     
+    # PASO 3: Inicializar servicios de alto nivel
     device_manager = DeviceManager(modbus_master, DataNormalizer())
     polling_service = PollingService(modbus_master, device_manager)
     
-    # Conectar callbacks para WebSocket
+    # PASO 4: Conectar callbacks para eventos WebSocket
+    # Estos callbacks permiten que el PollingService emita datos vía Socket.IO
     polling_service.on_telemetry_callback = emit_telemetry
     polling_service.on_diagnostic_callback = emit_diagnostic
     
-    logger.info("DeviceManager y PollingService inicializados")
+    logger.info("✅ Modbus Master, DeviceManager y PollingService inicializados correctamente")
     return True
 
 
@@ -331,6 +359,100 @@ def api_change_unit_id(unit_id):
         })
     else:
         return jsonify({'error': 'Failed to change unit ID'}), 500
+
+
+# ============================================================================
+# API REST - LOAD SENSOR (TARE / CALIBRATE / HISTORY)
+# ============================================================================
+
+@app.route('/api/devices/<int:unit_id>/load/calibrate', methods=['POST'])
+def api_load_calibrate(unit_id):
+    """Calibra el factor del HX711 sin lectura raw: ajuste multiplicativo basado en lectura actual.
+    Flujo:
+      1) (Opcional) tare previo debe hacerse antes de colocar peso conocido.
+      2) Usuario coloca un peso conocido (known_weight_kg).
+      3) Leer factor actual (HR_LOAD_CAL_FACTOR_DECI) y la medida (IR_MED_PESO_KG).
+      4) new_factor = old_factor * (measured_g / known_g).
+      5) Escribir nuevo factor (en décimas) en HR_LOAD_CAL_FACTOR_DECI.
+    """
+    if not modbus_master:
+        return jsonify({'error': 'Modbus client not initialized'}), 500
+
+    data = request.get_json() or {}
+    known_weight_kg = float(data.get('known_weight_kg', 0))
+    if known_weight_kg <= 0:
+        return jsonify({'error': 'known_weight_kg must be > 0'}), 400
+
+    HR_LOAD_CAL_FACTOR_DECI = 0x0017
+    IR_MED_PESO_KG = 0x000C
+
+    # Leer factor actual
+    regs = modbus_master.read_holding_registers(unit_id, HR_LOAD_CAL_FACTOR_DECI, 1)
+    if not regs:
+        return jsonify({'error': 'Failed to read current calibration factor'}), 503
+    current_factor = regs[0] / 10.0
+
+    # Leer medida actual (promedio implícito del firmware)
+    import time as _t
+    _t.sleep(0.25)
+    ir = modbus_master.read_input_registers(unit_id, IR_MED_PESO_KG, 1)
+    if not ir:
+        return jsonify({'error': 'Failed to read current load measurement'}), 503
+    # int16 → signed
+    val = ir[0] if ir[0] < 32768 else ir[0] - 65536
+    measured_kg = val / 100.0
+
+    measured_g = measured_kg * 1000.0
+    target_g = known_weight_kg * 1000.0
+    if target_g <= 0.0:
+        return jsonify({'error': 'Invalid known weight'}), 400
+
+    # Si lectura es cero, abortar para evitar división por cero
+    if measured_g == 0.0:
+        return jsonify({'error': 'Measured weight is zero; ensure weight is on the scale and try again'}), 400
+
+    new_factor = current_factor * (measured_g / target_g)
+    # Limitar a rango admitido en firmware: 10.0 .. 2000.0
+    new_factor = max(10.0, min(2000.0, new_factor))
+    new_factor_deci = int(round(new_factor * 10.0))
+
+    # Escribir nuevo factor
+    ok = modbus_master.write_register(unit_id, HR_LOAD_CAL_FACTOR_DECI, new_factor_deci)
+    if not ok:
+        return jsonify({'error': 'Failed to write new calibration factor'}), 500
+
+    # Verificación rápida
+    _t.sleep(0.3)
+    ir2 = modbus_master.read_input_registers(unit_id, IR_MED_PESO_KG, 1)
+    if ir2:
+        v2 = ir2[0] if ir2[0] < 32768 else ir2[0] - 65536
+        measured2_kg = v2 / 100.0
+    else:
+        measured2_kg = None
+
+    return jsonify({
+        'status': 'ok',
+        'known_weight_kg': known_weight_kg,
+        'prev_factor': current_factor,
+        'new_factor': new_factor,
+        'new_factor_deci': new_factor_deci,
+        'measured_before_kg': measured_kg,
+        'measured_after_kg': measured2_kg
+    })
+
+
+@app.route('/api/devices/<int:unit_id>/load/max100', methods=['GET'])
+def api_load_max100(unit_id):
+    """Devuelve el máximo de las últimas 100 muestras desde firmware (IR_STAT_LOAD_MAX_KG)."""
+    if not modbus_master:
+        return jsonify({'error': 'Modbus client not initialized'}), 500
+    IR_STAT_LOAD_MAX_KG = 0x001B
+    regs = modbus_master.read_input_registers(unit_id, IR_STAT_LOAD_MAX_KG, 1)
+    if not regs:
+        return jsonify({'error': 'Failed to read max-of-100 from device'}), 503
+    # int16
+    val = regs[0] if regs[0] < 32768 else regs[0] - 65536
+    return jsonify({'status': 'ok', 'unit_id': unit_id, 'max_kg': val / 100.0, 'raw': val})
 
 
 # ============================================================================

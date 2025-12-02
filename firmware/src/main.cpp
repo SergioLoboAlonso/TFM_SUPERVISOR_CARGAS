@@ -65,22 +65,6 @@ static void apply_ident_from_register(){     // Aplica cambios de HR_CMD_IDENT_S
   // Si no hay nueva escritura, no hacer nada: evita rearmado automático al expirar
 }
 
-// Gestiona sólo cambios de factor de calibración desde Holding Registers (sin tara runtime)
-static void apply_load_cal_from_registers(){
-#if SENSORS_LOAD_ENABLED
-  static uint16_t last_cal_seq  = 0;
-  uint16_t cal_seq = regs_get_load_cal_write_seq();
-  if (cal_seq != last_cal_seq){
-    last_cal_seq = cal_seq;
-    uint16_t v = 0;
-    if (regs_read_holding(HR_LOAD_CAL_FACTOR_DECI, 1, &v)){
-      float factor = ((float)v) / 10.0f;
-      sensor_load0.setCalibrationFactor(factor);
-    }
-  }
-#endif
-}
-
 void setup() {
   // Inicializa Serial USB para logs de debug (especialmente en Micro)
   #if defined(__AVR_ATmega32U4__)
@@ -120,7 +104,6 @@ void loop() {
   // Procesa peticiones RTU y actualiza parpadeo de Identify
   modbus_client.poll();
   apply_ident_from_register();
-  apply_load_cal_from_registers();
   ident.update();
 
   // Gestionar eventos de Guardar/Aplicar configuración

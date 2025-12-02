@@ -126,10 +126,44 @@ def start_initial_discovery():
 
             logger.info(f"🔎 Escaneo inicial de red {C.DEVICE_UNIT_ID_MIN}..{C.DEVICE_UNIT_ID_MAX} al arrancar")
             devices = device_manager.discover_devices(C.DEVICE_UNIT_ID_MIN, C.DEVICE_UNIT_ID_MAX, progress_callback=progress_callback)
+            
+            # Emitir evento de finalización
             socketio.emit('discovery_complete', {
                 'devices_found': len(devices),
                 'devices': [d.to_dict() for d in devices]
             })
+            
+            # NUEVO: Iniciar polling automáticamente si se encontraron dispositivos
+            if devices and polling_service:
+                unit_ids = [d.unit_id for d in devices]
+                logger.info(f"✅ Discovery completado: {len(devices)} dispositivos encontrados")
+                logger.info(f"🔄 Iniciando polling automático para UnitIDs: {unit_ids}")
+                
+                # Esperar un momento para que el frontend esté listo
+                import time
+                time.sleep(1)
+                
+                # Iniciar polling con intervalo por defecto
+                try:
+                    polling_service.start(
+                        unit_ids=unit_ids,
+                        interval_sec=C.POLL_INTERVAL_SEC,
+                        per_device_refresh_sec=C.PER_DEVICE_REFRESH_SEC
+                    )
+                    
+                    # Notificar al frontend que el polling ha iniciado
+                    socketio.emit('polling_auto_started', {
+                        'unit_ids': unit_ids,
+                        'interval_sec': C.POLL_INTERVAL_SEC,
+                        'per_device_refresh_sec': C.PER_DEVICE_REFRESH_SEC
+                    })
+                    logger.info("✅ Polling automático iniciado correctamente")
+                except Exception as e:
+                    logger.error(f"❌ Error al iniciar polling automático: {e}")
+                    socketio.emit('polling_auto_start_error', {'error': str(e)})
+            else:
+                logger.info(f"ℹ️  Discovery completado sin dispositivos; polling no iniciado")
+                
         except Exception as e:
             logger.error(f"Error en discovery inicial: {e}")
             socketio.emit('discovery_error', {'error': str(e)})
@@ -144,14 +178,16 @@ def start_initial_discovery():
 
 
 def emit_telemetry(telemetry_data: dict):
-    """Emite telemetría vía WebSocket"""
-    socketio.emit('telemetry_update', telemetry_data, namespace='/')
-    logger.debug(f"📡 WebSocket emit: telemetry_update para unit {telemetry_data.get('unit_id')}")
+    """Emite telemetría vía WebSocket (desde thread background)"""
+    with app.app_context():
+        socketio.emit('telemetry_update', telemetry_data, namespace='/')
+    logger.info(f"📡 WebSocket emit: telemetry_update para unit {telemetry_data.get('unit_id')}, status={telemetry_data.get('status')}")
 
 
 def emit_diagnostic(diagnostic_data: dict):
-    """Emite diagnósticos vía WebSocket"""
-    socketio.emit('diagnostic_update', diagnostic_data, namespace='/')
+    """Emite diagnósticos vía WebSocket (desde thread background)"""
+    with app.app_context():
+        socketio.emit('diagnostic_update', diagnostic_data, namespace='/')
     logger.debug(f"🔍 WebSocket emit: diagnostic_update para unit {diagnostic_data.get('unit_id')}")
 
 

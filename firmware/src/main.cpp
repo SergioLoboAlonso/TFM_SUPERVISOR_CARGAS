@@ -128,4 +128,21 @@ void loop() {
 
   // Sensores: delegar al gestor (normaliza y vuelca registros)
   sensorManager.pollAll(millis());
+
+  // DEBUG: Indicador visual de peso > 1kg
+  #if SENSORS_LOAD_ENABLED
+  {
+    uint16_t peso_ckg = 0; // Peso en centikilogramos (kg*100)
+    if (regs_read_input(IR_MED_PESO_KG, 1, &peso_ckg)) {
+      // Convertir a int16 para manejar valores negativos
+      int16_t peso_signed = (int16_t)peso_ckg;
+      // Encender LED si peso > 100 ckg (1.00 kg)
+      if (peso_signed > 100) {
+        digitalWrite(STATUS_LED_PIN, HIGH);
+      } else {
+        digitalWrite(STATUS_LED_PIN, LOW);
+      }
+    }
+  }
+  #endif
 }

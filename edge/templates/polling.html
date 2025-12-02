@@ -6,6 +6,32 @@
     <title>Polling - Edge Layer</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .device-card {
+            transition: all 0.3s ease;
+            border-left: 4px solid #198754;
+        }
+        .device-card.offline {
+            border-left-color: #dc3545;
+            opacity: 0.7;
+        }
+        .telemetry-value {
+            font-family: 'Courier New', monospace;
+            font-weight: bold;
+            font-size: 1.1em;
+        }
+        .updated-recently {
+            animation: pulse 0.5s;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
+        .device-list {
+            max-height: calc(100vh - 200px);
+            overflow-y: auto;
+        }
+    </style>
 </head>
 <body>
     <!-- Navbar Bootstrap (global) -->
@@ -27,64 +53,45 @@
     </nav>
 
     <div class="container-fluid mt-4">
-        <!-- Panel de Control -->
+        <!-- Panel de Estado -->
         <div class="card mb-3">
-            <div class="card-header bg-primary text-white">
-                <h5 class="mb-0">⚙️ Control de Polling</h5>
+            <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">📊 Monitoreo en Tiempo Real</h5>
+                <div>
+                    <span class="badge bg-light text-dark me-2">
+                        <span id="deviceCount">0</span> dispositivos
+                    </span>
+                    <span class="badge" id="pollingStatusBadge">
+                        <span class="spinner-border spinner-border-sm me-1" role="status"></span>
+                        Iniciando...
+                    </span>
+                </div>
             </div>
-            <div class="card-body">
-                <div class="row g-3">
-                    <!-- Selección de dispositivos -->
-                    <div class="col-md-6">
-                        <label for="deviceSelect" class="form-label">Dispositivos a monitorear</label>
-                        <select id="deviceSelect" class="form-select" multiple size="5">
-                            <option disabled>Cargando dispositivos...</option>
-                        </select>
-                        <small class="form-text text-muted">Mantén Ctrl/Cmd para seleccionar múltiples</small>
+            <div class="card-body py-2">
+                <div class="row text-center">
+                    <div class="col">
+                        <small class="text-muted">Última actualización</small><br>
+                        <span id="lastUpdate" class="text-muted">-</span>
                     </div>
-
-                    <!-- Intervalo y controles -->
-                    <div class="col-md-6">
-                        <label for="intervalInput" class="form-label">Intervalo (segundos)</label>
-                        <input type="number" id="intervalInput" class="form-control" value="2.0" min="0.2" step="0.1">
-                        <small class="form-text text-muted">Sugerido ≥ 0.5s. Valores muy bajos pueden provocar timeouts por saturación del bus.</small>
-                        
-                        <div class="mt-3">
-                            <button id="btnStart" class="btn btn-success btn-lg w-100 mb-2">
-                                ▶️ Iniciar Polling
-                            </button>
-                            <button id="btnStop" class="btn btn-danger btn-lg w-100" disabled>
-                                ⏹️ Detener Polling
-                            </button>
-                        </div>
-                        
-                        <!-- Estado -->
-                        <div id="pollingStatus" class="alert alert-secondary mt-3" role="alert">
-                            <strong>Estado:</strong> <span id="statusText">Detenido</span>
-                        </div>
+                    <div class="col">
+                        <small class="text-muted">Intervalo</small><br>
+                        <span id="pollingInterval">-</span>
+                    </div>
+                    <div class="col">
+                        <small class="text-muted">Updates/seg</small><br>
+                        <span id="updateRate">0.0</span>
                     </div>
                 </div>
             </div>
         </div>
 
-        <!-- Tarjetas de Telemetría (se llenan dinámicamente) -->
-        <div id="telemetryCards" class="row">
-            <div class="col-12 text-center text-muted py-5">
-                <h5>No hay dispositivos en monitoreo</h5>
-                <p>Selecciona dispositivos e inicia el polling para ver telemetría en tiempo real</p>
-            </div>
-        </div>
-
-        <!-- Log de Eventos -->
-        <div class="card mt-4">
-            <div class="card-header bg-secondary text-white d-flex justify-content-between align-items-center">
-                <h6 class="mb-0">📋 Log de Eventos</h6>
-                <button id="btnClearLog" class="btn btn-sm btn-outline-light">Limpiar</button>
-            </div>
-            <div class="card-body">
-                <div id="eventLog" style="max-height: 200px; overflow-y: auto; font-family: monospace; font-size: 0.9em;">
-                    <div class="text-muted">Esperando eventos...</div>
+        <!-- Lista de Dispositivos -->
+        <div class="device-list" id="deviceList">
+            <div class="text-center text-muted py-5">
+                <div class="spinner-border" role="status">
+                    <span class="visually-hidden">Cargando...</span>
                 </div>
+                <p class="mt-3">Esperando datos de dispositivos...</p>
             </div>
         </div>
     </div>
@@ -92,6 +99,178 @@
     <!-- Scripts -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
-    <script src="{{ url_for('static', filename='js/polling.js') }}"></script>
+    <script>
+        const socket = io();
+        const devices = new Map();
+        let updateCount = 0;
+        let lastUpdateTime = Date.now();
+
+        // Conectar a WebSocket
+        socket.on('connect', () => {
+            console.log('✅ Conectado a WebSocket');
+            updateStatusBadge('Conectado', 'success');
+        });
+
+        socket.on('disconnect', () => {
+            console.log('❌ Desconectado de WebSocket');
+            updateStatusBadge('Desconectado', 'danger');
+        });
+
+        // Polling iniciado automáticamente
+        socket.on('polling_auto_started', (data) => {
+            console.log('🔄 Polling automático iniciado:', data);
+            updateStatusBadge('Activo', 'success');
+            document.getElementById('pollingInterval').textContent = `${data.interval_sec}s`;
+        });
+
+        // Telemetría en tiempo real
+        socket.on('telemetry_update', (data) => {
+            if (data.status === 'ok') {
+                updateDevice(data);
+                updateCount++;
+                updateStats();
+            }
+        });
+
+        // Discovery completado
+        socket.on('discovery_complete', (data) => {
+            console.log('Discovery completado:', data);
+            // Los dispositivos se agregarán conforme llegue telemetría
+        });
+
+        function updateDevice(data) {
+            const unitId = data.unit_id;
+            const alias = data.alias || `Unit ${unitId}`;
+            const telemetry = data.telemetry || {};
+            
+            if (!devices.has(unitId)) {
+                devices.set(unitId, { unitId, alias, telemetry, lastUpdate: Date.now() });
+                renderDeviceCard(unitId);
+            } else {
+                devices.get(unitId).telemetry = telemetry;
+                devices.get(unitId).lastUpdate = Date.now();
+                devices.get(unitId).alias = alias;
+                updateDeviceCard(unitId);
+            }
+            
+            document.getElementById('deviceCount').textContent = devices.size;
+        }
+
+        function renderDeviceCard(unitId) {
+            const device = devices.get(unitId);
+            const deviceList = document.getElementById('deviceList');
+            
+            // Limpiar mensaje de carga si existe
+            if (deviceList.children[0]?.classList.contains('text-center')) {
+                deviceList.innerHTML = '';
+            }
+            
+            const card = document.createElement('div');
+            card.className = 'card device-card mb-3';
+            card.id = `device-${unitId}`;
+            card.innerHTML = `
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h6 class="mb-0">
+                        <span class="badge bg-primary me-2">ID ${unitId}</span>
+                        ${device.alias}
+                    </h6>
+                    <small class="text-muted device-timestamp">Ahora</small>
+                </div>
+                <div class="card-body">
+                    <div class="row g-3">
+                        <div class="col-md-3 text-center border-end">
+                            <small class="text-muted d-block">Muestras</small>
+                            <span class="telemetry-value device-samples">-</span>
+                        </div>
+                        <div class="col-md-3 text-center border-end">
+                            <small class="text-muted d-block">Peso</small>
+                            <span class="telemetry-value text-success device-load">-</span>
+                        </div>
+                        <div class="col-md-3 text-center border-end">
+                            <small class="text-muted d-block">Temperatura</small>
+                            <span class="telemetry-value text-info device-temp">-</span>
+                        </div>
+                        <div class="col-md-3 text-center">
+                            <small class="text-muted d-block">Ángulos</small>
+                            <span class="telemetry-value text-warning device-angles">-</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            deviceList.appendChild(card);
+            updateDeviceCard(unitId);
+        }
+
+        function updateDeviceCard(unitId) {
+            const device = devices.get(unitId);
+            const card = document.getElementById(`device-${unitId}`);
+            if (!card) return;
+            
+            const t = device.telemetry;
+            
+            // Actualizar valores
+            card.querySelector('.device-samples').textContent = 
+                t.sample_count !== undefined ? t.sample_count.toLocaleString() : '-';
+            
+            card.querySelector('.device-load').textContent = 
+                t.load_kg !== undefined ? `${t.load_kg.toFixed(2)} kg` : '-';
+            
+            card.querySelector('.device-temp').textContent = 
+                t.temperature_c !== undefined ? `${t.temperature_c.toFixed(1)}°C` : '-';
+            
+            const angleX = t.angle_x_deg !== undefined ? t.angle_x_deg.toFixed(1) : '-';
+            const angleY = t.angle_y_deg !== undefined ? t.angle_y_deg.toFixed(1) : '-';
+            card.querySelector('.device-angles').textContent = `X:${angleX}° Y:${angleY}°`;
+            
+            // Timestamp relativo
+            const elapsed = Math.round((Date.now() - device.lastUpdate) / 1000);
+            const timeText = elapsed < 5 ? 'Ahora' : `Hace ${elapsed}s`;
+            card.querySelector('.device-timestamp').textContent = timeText;
+            
+            // Animación de actualización
+            card.classList.add('updated-recently');
+            setTimeout(() => card.classList.remove('updated-recently'), 500);
+        }
+
+        function updateStats() {
+            const now = Date.now();
+            const elapsed = (now - lastUpdateTime) / 1000;
+            
+            if (elapsed >= 1) {
+                const rate = (updateCount / elapsed).toFixed(1);
+                document.getElementById('updateRate').textContent = rate;
+                updateCount = 0;
+                lastUpdateTime = now;
+            }
+            
+            document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
+        }
+
+        function updateStatusBadge(text, color) {
+            const badge = document.getElementById('pollingStatusBadge');
+            badge.className = `badge bg-${color}`;
+            badge.innerHTML = text;
+        }
+
+        // Actualizar timestamps cada segundo
+        setInterval(() => {
+            devices.forEach((device, unitId) => {
+                const card = document.getElementById(`device-${unitId}`);
+                if (card) {
+                    const elapsed = Math.round((Date.now() - device.lastUpdate) / 1000);
+                    const timeText = elapsed < 5 ? 'Ahora' : `Hace ${elapsed}s`;
+                    card.querySelector('.device-timestamp').textContent = timeText;
+                    
+                    // Marcar como offline si no hay updates en 10s
+                    if (elapsed > 10) {
+                        card.classList.add('offline');
+                    } else {
+                        card.classList.remove('offline');
+                    }
+                }
+            });
+        }, 1000);
+    </script>
 </body>
 </html>

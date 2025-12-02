@@ -241,6 +241,7 @@ class PollingService:
                             logger.debug(f"unit {unit_id}: error => backoff {backoff:.1f}s (errores={self._consec_errors[unit_id]})")
 
                         if self.on_telemetry_callback:
+                            logger.info(f"🔔 Llamando callback telemetría para unit {unit_id}, status={telemetry_data.get('status')}")
                             self.on_telemetry_callback(telemetry_data)
 
                     # Diagnósticos aproximados cada 10s por dispositivo

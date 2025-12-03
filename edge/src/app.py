@@ -281,6 +281,58 @@ def api_discover():
                 'devices_found': len(devices),
                 'devices': [d.to_dict() for d in devices]
             })
+            
+            # Si el polling está activo, añadir nuevos dispositivos automáticamente
+            if devices and polling_service and polling_service.is_active():
+                new_unit_ids = [d.unit_id for d in devices]
+                current_unit_ids = polling_service.unit_ids or []
+                
+                # Encontrar dispositivos nuevos que no estén en polling
+                truly_new = [uid for uid in new_unit_ids if uid not in current_unit_ids]
+                
+                if truly_new:
+                    # Combinar dispositivos actuales con nuevos
+                    combined_unit_ids = list(set(current_unit_ids + truly_new))
+                    
+                    logger.info(f"🔄 Discovery encontró {len(truly_new)} dispositivo(s) nuevo(s): {truly_new}")
+                    logger.info(f"🔄 Reiniciando polling con lista actualizada: {combined_unit_ids}")
+                    
+                    # Reiniciar polling con la lista combinada
+                    polling_service.stop()
+                    import time
+                    time.sleep(0.5)
+                    
+                    polling_service.start(
+                        unit_ids=combined_unit_ids,
+                        interval_sec=polling_service.interval_sec,
+                        per_device_refresh_sec=polling_service.per_device_refresh_sec
+                    )
+                    
+                    # Notificar al frontend
+                    socketio.emit('polling_devices_updated', {
+                        'unit_ids': combined_unit_ids,
+                        'new_devices': truly_new
+                    })
+                    logger.info(f"✅ Polling actualizado con {len(truly_new)} dispositivo(s) nuevo(s)")
+                else:
+                    logger.info("ℹ️  No se encontraron dispositivos nuevos para añadir al polling")
+            elif devices and polling_service and not polling_service.is_active():
+                # Si polling no está activo pero hay dispositivos, iniciarlo
+                unit_ids = [d.unit_id for d in devices]
+                logger.info(f"🚀 Iniciando polling automático para {len(unit_ids)} dispositivo(s): {unit_ids}")
+                
+                polling_service.start(
+                    unit_ids=unit_ids,
+                    interval_sec=Config.POLL_INTERVAL_SEC,
+                    per_device_refresh_sec=Config.PER_DEVICE_REFRESH_SEC
+                )
+                
+                socketio.emit('polling_auto_started', {
+                    'unit_ids': unit_ids,
+                    'interval_sec': Config.POLL_INTERVAL_SEC
+                })
+                logger.info("✅ Polling iniciado automáticamente tras discovery")
+                
         except Exception as e:
             logger.error(f"Error en discovery: {e}")
             socketio.emit('discovery_error', {'error': str(e)})

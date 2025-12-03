@@ -144,8 +144,24 @@
             const telemetry = data.telemetry || {};
             
             if (!devices.has(unitId)) {
-                devices.set(unitId, { unitId, alias, telemetry, lastUpdate: Date.now() });
-                renderDeviceCard(unitId);
+                // Obtener capabilities del dispositivo
+                fetch(`/api/devices/${unitId}`)
+                    .then(res => res.json())
+                    .then(deviceInfo => {
+                        devices.set(unitId, { 
+                            unitId, 
+                            alias, 
+                            telemetry, 
+                            lastUpdate: Date.now(),
+                            capabilities: deviceInfo.capabilities || []
+                        });
+                        renderDeviceCard(unitId);
+                    })
+                    .catch(err => {
+                        console.error('Error fetching device capabilities:', err);
+                        devices.set(unitId, { unitId, alias, telemetry, lastUpdate: Date.now(), capabilities: [] });
+                        renderDeviceCard(unitId);
+                    });
             } else {
                 devices.get(unitId).telemetry = telemetry;
                 devices.get(unitId).lastUpdate = Date.now();
@@ -159,10 +175,77 @@
         function renderDeviceCard(unitId) {
             const device = devices.get(unitId);
             const deviceList = document.getElementById('deviceList');
+            const caps = device.capabilities || [];
+            
+            // Detectar capabilities
+            const hasWind = caps.includes('Wind');
+            const hasMPU = caps.includes('MPU6050');
+            const hasLoad = caps.includes('Load');
             
             // Limpiar mensaje de carga si existe
             if (deviceList.children[0]?.classList.contains('text-center')) {
                 deviceList.innerHTML = '';
+            }
+            
+            // Construir columnas dinámicamente según capabilities
+            let columns = [];
+            
+            // Muestras (siempre)
+            columns.push(`
+                <div class="col text-center border-end">
+                    <small class="text-muted d-block">Muestras</small>
+                    <span class="telemetry-value device-samples">-</span>
+                </div>
+            `);
+            
+            // Wind
+            if (hasWind) {
+                columns.push(`
+                    <div class="col text-center border-end">
+                        <small class="text-muted d-block">🌬️ Viento</small>
+                        <span class="telemetry-value text-primary device-wind">-</span>
+                    </div>
+                `);
+            }
+            
+            // Load
+            if (hasLoad) {
+                columns.push(`
+                    <div class="col text-center border-end">
+                        <small class="text-muted d-block">⚖️ Peso</small>
+                        <span class="telemetry-value text-success device-load">-</span>
+                    </div>
+                `);
+            }
+            
+            // MPU Temperature
+            if (hasMPU) {
+                columns.push(`
+                    <div class="col text-center border-end">
+                        <small class="text-muted d-block">🌡️ Temperatura</small>
+                        <span class="telemetry-value text-info device-temp">-</span>
+                    </div>
+                `);
+            }
+            
+            // MPU Angles
+            if (hasMPU) {
+                columns.push(`
+                    <div class="col text-center border-end">
+                        <small class="text-muted d-block">📐 Ángulos</small>
+                        <span class="telemetry-value text-warning device-angles">-</span>
+                    </div>
+                `);
+            }
+            
+            // MPU Aceleraciones
+            if (hasMPU) {
+                columns.push(`
+                    <div class="col text-center">
+                        <small class="text-muted d-block">📊 Aceleración</small>
+                        <span class="telemetry-value text-danger device-accel">-</span>
+                    </div>
+                `);
             }
             
             const card = document.createElement('div');
@@ -173,27 +256,13 @@
                     <h6 class="mb-0">
                         <span class="badge bg-primary me-2">ID ${unitId}</span>
                         ${device.alias}
+                        <small class="text-muted ms-2">${caps.join(', ')}</small>
                     </h6>
                     <small class="text-muted device-timestamp">Ahora</small>
                 </div>
                 <div class="card-body">
                     <div class="row g-3">
-                        <div class="col-md-3 text-center border-end">
-                            <small class="text-muted d-block">Muestras</small>
-                            <span class="telemetry-value device-samples">-</span>
-                        </div>
-                        <div class="col-md-3 text-center border-end">
-                            <small class="text-muted d-block">Peso</small>
-                            <span class="telemetry-value text-success device-load">-</span>
-                        </div>
-                        <div class="col-md-3 text-center border-end">
-                            <small class="text-muted d-block">Temperatura</small>
-                            <span class="telemetry-value text-info device-temp">-</span>
-                        </div>
-                        <div class="col-md-3 text-center">
-                            <small class="text-muted d-block">Ángulos</small>
-                            <span class="telemetry-value text-warning device-angles">-</span>
-                        </div>
+                        ${columns.join('')}
                     </div>
                 </div>
             `;
@@ -208,20 +277,58 @@
             if (!card) return;
             
             const t = device.telemetry;
+            const caps = device.capabilities || [];
             
-            // Actualizar valores
-            card.querySelector('.device-samples').textContent = 
-                t.sample_count !== undefined ? t.sample_count.toLocaleString() : '-';
+            // Actualizar muestras (siempre)
+            const samplesEl = card.querySelector('.device-samples');
+            if (samplesEl) {
+                samplesEl.textContent = t.sample_count !== undefined ? t.sample_count.toLocaleString() : '-';
+            }
             
-            card.querySelector('.device-load').textContent = 
-                t.load_kg !== undefined ? `${t.load_kg.toFixed(2)} kg` : '-';
+            // Actualizar viento (si tiene Wind capability)
+            if (caps.includes('Wind')) {
+                const windEl = card.querySelector('.device-wind');
+                if (windEl && t.wind_speed_mps !== undefined) {
+                    windEl.textContent = `${t.wind_speed_mps.toFixed(2)} m/s (${t.wind_speed_kmh.toFixed(1)} km/h)`;
+                } else if (windEl) {
+                    windEl.textContent = '-';
+                }
+            }
             
-            card.querySelector('.device-temp').textContent = 
-                t.temperature_c !== undefined ? `${t.temperature_c.toFixed(1)}°C` : '-';
+            // Actualizar peso (si tiene Load capability)
+            if (caps.includes('Load')) {
+                const loadEl = card.querySelector('.device-load');
+                if (loadEl) {
+                    loadEl.textContent = t.load_kg !== undefined ? `${t.load_kg.toFixed(2)} kg` : '-';
+                }
+            }
             
-            const angleX = t.angle_x_deg !== undefined ? t.angle_x_deg.toFixed(1) : '-';
-            const angleY = t.angle_y_deg !== undefined ? t.angle_y_deg.toFixed(1) : '-';
-            card.querySelector('.device-angles').textContent = `X:${angleX}° Y:${angleY}°`;
+            // Actualizar temperatura MPU (si tiene MPU6050 capability)
+            if (caps.includes('MPU6050')) {
+                const tempEl = card.querySelector('.device-temp');
+                if (tempEl) {
+                    tempEl.textContent = t.temperature_c !== undefined ? `${t.temperature_c.toFixed(1)}°C` : '-';
+                }
+                
+                // Actualizar ángulos
+                const anglesEl = card.querySelector('.device-angles');
+                if (anglesEl) {
+                    const angleX = t.angle_x_deg !== undefined ? t.angle_x_deg.toFixed(1) : '-';
+                    const angleY = t.angle_y_deg !== undefined ? t.angle_y_deg.toFixed(1) : '-';
+                    anglesEl.textContent = `X:${angleX}° Y:${angleY}°`;
+                }
+                
+                // Actualizar aceleraciones
+                const accelEl = card.querySelector('.device-accel');
+                if (accelEl && t.acceleration) {
+                    const ax = t.acceleration.x_g !== undefined ? t.acceleration.x_g.toFixed(3) : '-';
+                    const ay = t.acceleration.y_g !== undefined ? t.acceleration.y_g.toFixed(3) : '-';
+                    const az = t.acceleration.z_g !== undefined ? t.acceleration.z_g.toFixed(3) : '-';
+                    accelEl.innerHTML = `<small>X:${ax}g<br>Y:${ay}g<br>Z:${az}g</small>`;
+                } else if (accelEl) {
+                    accelEl.textContent = '-';
+                }
+            }
             
             // Timestamp relativo
             const elapsed = Math.round((Date.now() - device.lastUpdate) / 1000);

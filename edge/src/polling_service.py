@@ -97,6 +97,16 @@ class PollingService:
         self._diag_every_ticks = 10
         self._consec_errors = {}
         
+        # Tracking de estado de conectividad de dispositivos
+        self._device_online_state = {}  # {unit_id: bool}
+        self._device_offline_timestamp = {}  # {unit_id: timestamp} - cuando pasó a offline
+        
+        # Caché de diagnóstico para evitar lecturas Modbus adicionales
+        self._diagnostic_cache = {}  # {unit_id: diagnostic_data}
+        
+        # Timeout para eliminar dispositivos offline del polling (180 segundos)
+        self.OFFLINE_REMOVAL_TIMEOUT_SEC = 180
+        
         logger.info("PollingService inicializado")
     
     def start(self, unit_ids: List[int], interval_sec: float = None, per_device_refresh_sec: float = None):
@@ -155,8 +165,9 @@ class PollingService:
         # Inicializar planificador
         self._cursor = 0
         self._next_allowed_poll_ts = {uid: 0.0 for uid in self.unit_ids}
-        self._tick_counter = 0
-        self._diag_every_ticks = max(1, 10 * max(1, len(self.unit_ids)))
+        self._device_tick_counter = {uid: 0 for uid in self.unit_ids}  # Contador por dispositivo
+        self._gateway_tick_counter = 0  # Contador para diagnóstico agregado del Gateway
+        self._diag_every_ticks = 10  # Diagnóstico cada 10 ticks (~10 segundos por dispositivo)
         self._consec_errors = {uid: 0 for uid in self.unit_ids}
 
         self._stop_event.clear()
@@ -233,7 +244,26 @@ class PollingService:
                     if telemetry_data:
                         if telemetry_data.get('status') == 'ok':
                             self._next_allowed_poll_ts[unit_id] = 0.0
+                            
+                            # Detectar cambio de estado online
+                            was_offline = self._device_online_state.get(unit_id, False) == False
+                            if was_offline and self._consec_errors.get(unit_id, 0) > 0:
+                                # Dispositivo vuelve a estar online
+                                if self.mqtt_bridge:
+                                    device_name = f"Sensor_Unit{unit_id}"
+                                    self.mqtt_bridge.publish_device_connectivity(device_name, connected=True)
+                                    logger.info(f"🟢 Dispositivo unit_{unit_id} detectado como ONLINE")
+                                
+                                # Auto-resolver todas las alertas del dispositivo que volvió online
+                                if self.alert_engine:
+                                    self.alert_engine.clear_device_alerts(unit_id)
+                            
+                            self._device_online_state[unit_id] = True
                             self._consec_errors[unit_id] = 0
+                            
+                            # Limpiar timestamp de offline si existía
+                            if unit_id in self._device_offline_timestamp:
+                                del self._device_offline_timestamp[unit_id]
                             # Guardar último paquete
                             self._last_telemetry[unit_id] = telemetry_data
                             
@@ -247,6 +277,24 @@ class PollingService:
                         else:
                             # Aumentar contador y aplicar backoff adaptativo
                             self._consec_errors[unit_id] = self._consec_errors.get(unit_id, 0) + 1
+                            
+                            # Detectar cambio a estado offline (después de 3 errores consecutivos)
+                            if self._consec_errors[unit_id] == 3:
+                                was_online = self._device_online_state.get(unit_id, True)
+                                if was_online:
+                                    # Dispositivo pasa a estar offline
+                                    self._device_online_state[unit_id] = False
+                                    self._device_offline_timestamp[unit_id] = time.time()
+                                    
+                                    # Limpiar caché de diagnóstico
+                                    if unit_id in self._diagnostic_cache:
+                                        del self._diagnostic_cache[unit_id]
+                                    
+                                    if self.mqtt_bridge:
+                                        device_name = f"Sensor_Unit{unit_id}"
+                                        self.mqtt_bridge.publish_device_connectivity(device_name, connected=False)
+                                        logger.warning(f"🔴 Dispositivo unit_{unit_id} detectado como OFFLINE")
+                            
                             base = Config.OFFLINE_BACKOFF_SEC
                             cap = Config.OFFLINE_BACKOFF_MAX_SEC
                             backoff = min(base * (2 ** (self._consec_errors[unit_id] - 1)), cap)
@@ -257,12 +305,28 @@ class PollingService:
                             logger.info(f"🔔 Llamando callback telemetría para unit {unit_id}, status={telemetry_data.get('status')}")
                             self.on_telemetry_callback(telemetry_data)
 
-                    # Diagnósticos aproximados cada 10s por dispositivo
-                    self._tick_counter += 1
-                    if (self._tick_counter % self._diag_every_ticks) == 0:
-                        diagnostic_data = self._read_diagnostic(unit_id)
-                        if diagnostic_data and self.on_diagnostic_callback:
-                            self.on_diagnostic_callback(diagnostic_data)
+                    # Diagnósticos cada N ticks por dispositivo (~10 segundos)
+                    # Solo si el dispositivo está online
+                    self._device_tick_counter[unit_id] += 1
+                    if (self._device_tick_counter[unit_id] % self._diag_every_ticks) == 0:
+                        is_online = self._device_online_state.get(unit_id, False)
+                        if is_online:
+                            diagnostic_data = self._read_diagnostic(unit_id)
+                            if diagnostic_data:
+                                # Guardar en caché para diagnóstico agregado del Gateway
+                                self._diagnostic_cache[unit_id] = diagnostic_data
+                                
+                                # Emitir vía WebSocket (dashboard local)
+                                if self.on_diagnostic_callback:
+                                    self.on_diagnostic_callback(diagnostic_data)
+                                
+                                # Publicar diagnóstico individual del dispositivo
+                                self._publish_diagnostic_to_mqtt(unit_id, diagnostic_data)
+                    
+                    # Diagnóstico agregado del Gateway (total de todos los dispositivos)
+                    self._gateway_tick_counter += 1
+                    if (self._gateway_tick_counter % (self._diag_every_ticks * len(self.unit_ids))) == 0:
+                        self._publish_gateway_diagnostic_to_mqtt()
 
                     time.sleep(Config.INTER_FRAME_DELAY_MS / 1000.0)
 
@@ -279,6 +343,20 @@ class PollingService:
                     if old_timeout is not None and errors > 0:
                         self.modbus.client.timeout = old_timeout
 
+            # Verificar dispositivos offline por más de 180 segundos y eliminarlos
+            now = time.time()
+            devices_to_remove = []
+            for unit_id in list(self.unit_ids):
+                if unit_id in self._device_offline_timestamp:
+                    offline_duration = now - self._device_offline_timestamp[unit_id]
+                    if offline_duration > self.OFFLINE_REMOVAL_TIMEOUT_SEC:
+                        devices_to_remove.append(unit_id)
+                        logger.warning(f"⏱️  Dispositivo unit_{unit_id} offline durante {offline_duration:.0f}s - ELIMINANDO del polling")
+            
+            # Eliminar dispositivos que excedieron el timeout
+            for unit_id in devices_to_remove:
+                self._remove_device_from_polling(unit_id)
+
             # Mantener objetivo de 1s por dispositivo ⇒ tick ≈ 1/len(unit_ids)
             target_tick = max(self.MIN_INTERVAL_SEC, self.per_device_refresh_sec / max(1, len(self.unit_ids)))
             elapsed = time.time() - tick_start
@@ -287,6 +365,50 @@ class PollingService:
                 self._stop_event.wait(timeout=sleep_time)
         
         logger.info("Saliendo del bucle de polling")
+    
+    def _remove_device_from_polling(self, unit_id: int):
+        """
+        Elimina un dispositivo del polling activo y limpia todos sus estados.
+        Se llama cuando un dispositivo lleva más de 180 segundos offline.
+        
+        Args:
+            unit_id: ID del dispositivo a eliminar
+        """
+        try:
+            # Eliminar de la lista de polling
+            if unit_id in self.unit_ids:
+                self.unit_ids.remove(unit_id)
+            
+            # Limpiar todos los estados del dispositivo
+            if unit_id in self._device_online_state:
+                del self._device_online_state[unit_id]
+            
+            if unit_id in self._device_offline_timestamp:
+                del self._device_offline_timestamp[unit_id]
+            
+            if unit_id in self._diagnostic_cache:
+                del self._diagnostic_cache[unit_id]
+            
+            if unit_id in self._consec_errors:
+                del self._consec_errors[unit_id]
+            
+            if unit_id in self._next_allowed_poll_ts:
+                del self._next_allowed_poll_ts[unit_id]
+            
+            if unit_id in self._device_tick_counter:
+                del self._device_tick_counter[unit_id]
+            
+            if unit_id in self._last_telemetry:
+                del self._last_telemetry[unit_id]
+            
+            # Limpiar alertas activas del dispositivo
+            if self.alert_engine:
+                self.alert_engine.clear_device_alerts(unit_id)
+            
+            logger.info(f"🗑️  Dispositivo unit_{unit_id} eliminado del polling y estados limpiados")
+            
+        except Exception as e:
+            logger.error(f"Error al eliminar dispositivo unit_{unit_id}: {e}", exc_info=True)
     
     def get_last_wind(self, unit_id: int) -> Optional[dict]:
         """Retorna último paquete de viento para unit_id (o None si no hay)."""
@@ -617,6 +739,118 @@ class PollingService:
             )
     
     
+    def _publish_diagnostic_to_mqtt(self, unit_id: int, diagnostic_data: dict):
+        """
+        Publica métricas de diagnóstico individuales del dispositivo a MQTT/ThingsBoard.
+        
+        Args:
+            unit_id: ID del dispositivo Modbus
+            diagnostic_data: Dict con datos de _read_diagnostic()
+        """
+        if not self.mqtt_bridge or not diagnostic_data:
+            return
+        
+        try:
+            device_id = f"unit_{unit_id}"
+            timestamp = diagnostic_data.get('timestamp')
+            modbus_stats = diagnostic_data.get('modbus_stats', {})
+            
+            # Calcular tasa de éxito individual
+            total_rx = modbus_stats.get('rx_ok', 0) + modbus_stats.get('crc_errors', 0) + modbus_stats.get('exceptions', 0)
+            success_rate = (modbus_stats.get('rx_ok', 0) / total_rx * 100) if total_rx > 0 else 100.0
+            
+            # Publicar diagnóstico individual del dispositivo
+            self.mqtt_bridge.publish_measurement(
+                device_id=device_id,
+                sensor_id=f"UNIT_{unit_id}_DIAG",
+                sensor_type="diagnostic",
+                value=success_rate,
+                unit="percent",
+                timestamp=timestamp,
+                quality="GOOD",
+                extra_keys={
+                    'diag_total_requests': total_rx,
+                    'diag_rx_ok': modbus_stats.get('rx_ok', 0),
+                    'diag_crc_errors': modbus_stats.get('crc_errors', 0),
+                    'diag_timeout_errors': modbus_stats.get('exceptions', 0),
+                    'diag_uart_overruns': modbus_stats.get('uart_overruns', 0),
+                    'diag_tx_ok': modbus_stats.get('tx_ok', 0),
+                    'diag_last_exception': modbus_stats.get('last_exception', 'NONE')
+                }
+            )
+            
+            logger.info(f"📊 Diagnóstico individual publicado para unit_{unit_id}: success_rate={success_rate:.1f}%")
+        
+        except Exception as e:
+            logger.error(f"Error al publicar diagnóstico individual: {e}", exc_info=True)
+    
+    
+    def _publish_gateway_diagnostic_to_mqtt(self):
+        """
+        Publica diagnóstico agregado del Gateway (maestro Modbus) a MQTT/ThingsBoard.
+        
+        Suma las estadísticas de comunicación de todos los dispositivos para reportar
+        la salud global del bus Modbus en el Gateway (RPI_EDGE).
+        
+        Usa caché de diagnóstico para evitar lecturas Modbus adicionales.
+        """
+        if not self.mqtt_bridge:
+            return
+        
+        try:
+            # Acumular estadísticas de todos los dispositivos (solo online)
+            total_rx_ok = 0
+            total_crc_errors = 0
+            total_exceptions = 0
+            total_tx_ok = 0
+            total_uart_overruns = 0
+            last_exception = 0
+            
+            # Usar caché de diagnóstico en lugar de hacer nuevas lecturas
+            for unit_id in self.unit_ids:
+                is_online = self._device_online_state.get(unit_id, False)
+                if is_online and unit_id in self._diagnostic_cache:
+                    diagnostic_data = self._diagnostic_cache[unit_id]
+                    stats = diagnostic_data.get('modbus_stats', {})
+                    total_rx_ok += stats.get('rx_ok', 0)
+                    total_crc_errors += stats.get('crc_errors', 0)
+                    total_exceptions += stats.get('exceptions', 0)
+                    total_tx_ok += stats.get('tx_ok', 0)
+                    total_uart_overruns += stats.get('uart_overruns', 0)
+                    if stats.get('last_exception', 0) != 0:
+                        last_exception = stats.get('last_exception', 0)
+            
+            # Calcular tasa de éxito global
+            total_requests = total_rx_ok + total_crc_errors + total_exceptions
+            success_rate = (total_rx_ok / total_requests * 100) if total_requests > 0 else 100.0
+            
+            # Publicar en el Gateway (device_id = "gateway")
+            timestamp = datetime.now().isoformat()
+            self.mqtt_bridge.publish_measurement(
+                device_id="gateway",
+                sensor_id="GATEWAY_MODBUS_DIAG",
+                sensor_type="diagnostic",
+                value=success_rate,
+                unit="percent",
+                timestamp=timestamp,
+                quality="GOOD",
+                extra_keys={
+                    'diag_total_requests': total_requests,
+                    'diag_rx_ok': total_rx_ok,
+                    'diag_crc_errors': total_crc_errors,
+                    'diag_timeout_errors': total_exceptions,
+                    'diag_uart_overruns': total_uart_overruns,
+                    'diag_tx_ok': total_tx_ok,
+                    'diag_last_exception': last_exception
+                }
+            )
+            
+            logger.info(f"📡 Diagnóstico GATEWAY agregado publicado: success_rate={success_rate:.1f}%, total_requests={total_requests}")
+        
+        except Exception as e:
+            logger.error(f"Error al publicar diagnóstico del Gateway: {e}", exc_info=True)
+    
+    
     def _save_to_database(self, telemetry_data: dict):
         """
         Guarda telemetría en la base de datos y publica a MQTT.
@@ -644,6 +878,17 @@ class PollingService:
             # Obtener capabilities del dispositivo para determinar tipo
             device = self.device_mgr.get_device(unit_id)
             capabilities = set(device.capabilities) if device and device.capabilities else set()
+            
+            # Publicar atributos del dispositivo a ThingsBoard (solo una vez por dispositivo)
+            if self.mqtt_bridge and device:
+                device_name = f"Sensor_Unit{unit_id}"
+                attributes = {
+                    'alias': alias,  # Nombre/alias del dispositivo
+                    'unit_id': unit_id,
+                    'capabilities': ', '.join(sorted(capabilities)),
+                    'rig_id': device.rig_id if hasattr(device, 'rig_id') else 'default'
+                }
+                self.mqtt_bridge.publish_device_attributes(device_name, attributes)
             
             # Determinar tipo principal del sensor
             # Prioridad: MPU6050 > Wind > Load

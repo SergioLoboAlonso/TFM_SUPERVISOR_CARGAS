@@ -62,7 +62,7 @@ class AlertEngine:
     Monitorea medidas y estado de dispositivos, generando alertas automáticas.
     """
     
-    def __init__(self, database: Database, socketio=None, mqtt_bridge=None):
+    def __init__(self, database: Database, socketio=None, mqtt_bridge=None, polling_service=None):
         """
         Inicializa el motor de alertas.
         
@@ -70,10 +70,12 @@ class AlertEngine:
             database: Instancia de Database para acceso a BD
             socketio: Instancia de SocketIO para notificaciones en tiempo real (opcional)
             mqtt_bridge: Instancia de MQTTBridge para publicación IoT (opcional)
+            polling_service: Instancia de PollingService para verificar dispositivos activos (opcional)
         """
         self.db = database
         self.socketio = socketio
         self.mqtt_bridge = mqtt_bridge
+        self.polling_service = polling_service
         
         # Cache de última alerta por (sensor_id, code) para debouncing
         # Estructura: {(sensor_id, code): timestamp_ultimo_alert}
@@ -235,11 +237,24 @@ class AlertEngine:
         devices = self.db.get_all_devices()
         now = datetime.utcnow()  # Naive UTC
         
+        # Obtener lista de dispositivos activos en polling (si disponible)
+        active_unit_ids = []
+        if self.polling_service and hasattr(self.polling_service, 'unit_ids'):
+            active_unit_ids = self.polling_service.unit_ids
+            logger.debug(f"AlertEngine: Monitoreando solo dispositivos activos en polling: {active_unit_ids}")
+        else:
+            logger.warning(f"AlertEngine: No se pudo obtener lista de dispositivos activos, monitoreando TODOS")
+        
         for device in devices:
             if not device.get('enabled', 1):
                 continue  # Ignorar dispositivos deshabilitados
             
             unit_id = device['unit_id']
+            
+            # CRÍTICO: Solo monitorear dispositivos que están en polling activo
+            if active_unit_ids and unit_id not in active_unit_ids:
+                logger.debug(f"AlertEngine: Ignorando dispositivo unit_{unit_id} (no está en polling activo)")
+                continue  # Dispositivo no está siendo polleado, ignorar
             alias = device['alias']
             last_seen_str = device['last_seen']
             
@@ -687,3 +702,65 @@ class AlertEngine:
         # Emitir evento de reconocimiento vía SocketIO
         if self.socketio:
             self.socketio.emit('alert_acknowledged', {'alert_id': alert_id}, namespace='/')
+    
+    
+    def clear_device_alerts(self, unit_id: int):
+        """
+        Limpia todas las alertas activas de un dispositivo y su caché.
+        Se llama cuando un dispositivo se elimina del polling por timeout.
+        
+        Args:
+            unit_id: ID del dispositivo a limpiar
+        """
+        try:
+            # Buscar y auto-reconocer TODAS las alertas del dispositivo
+            active_alerts = self.db.get_alerts(ack=False, limit=1000)
+            
+            resolved_count = 0
+            device_prefix = f"UNIT_{unit_id}_"
+            
+            for alert in active_alerts:
+                alert_id = alert.get('id')
+                alert_sensor_id = alert.get('sensor_id', '')
+                
+                # Verificar si la alerta pertenece a este dispositivo
+                # Puede ser alerta de sensor (UNIT_X_TILT_Y) o de dispositivo (device_X)
+                if (alert_sensor_id and alert_sensor_id.startswith(device_prefix)) or \
+                   (alert.get('message', '').find(f"Unit {unit_id}") >= 0):
+                    
+                    # Auto-reconocer esta alerta
+                    self.db.acknowledge_alert(alert_id)
+                    resolved_count += 1
+                    
+                    # Emitir evento de reconocimiento
+                    if self.socketio:
+                        self.socketio.emit('alert_acknowledged', {
+                            'alert_id': alert_id,
+                            'auto': True,
+                            'reason': f"Dispositivo {unit_id} eliminado del polling por timeout (180s offline)"
+                        }, namespace='/')
+            
+            if resolved_count > 0:
+                logger.info(f"✅ {resolved_count} alerta(s) del dispositivo unit_{unit_id} auto-reconocidas")
+            
+            # Limpiar caché de alertas del dispositivo
+            keys_to_remove = [
+                key for key in self._active_alerts_cache.keys()
+                if key[0].startswith(device_prefix)
+            ]
+            for key in keys_to_remove:
+                del self._active_alerts_cache[key]
+            
+            # Limpiar caché de última alerta del dispositivo
+            keys_to_remove = [
+                key for key in self._last_alert_cache.keys()
+                if key[0].startswith(device_prefix)
+            ]
+            for key in keys_to_remove:
+                del self._last_alert_cache[key]
+            
+            logger.info(f"🧹 Alertas del dispositivo unit_{unit_id} limpiadas")
+            
+        except Exception as e:
+            logger.error(f"Error al limpiar alertas del dispositivo {unit_id}: {e}", exc_info=True)
+

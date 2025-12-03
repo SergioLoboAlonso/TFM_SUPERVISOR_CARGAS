@@ -8,10 +8,15 @@
         <span id="alerts-toggle-icon">▲</span>
     </div>
     <div id="alerts-content" class="alerts-content">
-        <div class="alerts-stats mb-2">
-            <span class="badge bg-danger me-1" id="stat-alarm">0 ALARM</span>
-            <span class="badge bg-warning text-dark me-1" id="stat-warn">0 WARN</span>
-            <span class="badge bg-info me-1" id="stat-info">0 INFO</span>
+        <div class="d-flex justify-content-between align-items-center mb-2">
+            <div class="alerts-stats">
+                <span class="badge bg-danger me-1" id="stat-alarm">0 ALARM</span>
+                <span class="badge bg-warning text-dark me-1" id="stat-warn">0 WARN</span>
+                <span class="badge bg-info me-1" id="stat-info">0 INFO</span>
+            </div>
+            <button class="btn btn-sm btn-outline-danger" onclick="clearAllAlerts()" title="Borrar todas las alertas">
+                🗑️ Borrar Todas
+            </button>
         </div>
         <div id="alerts-list" class="alerts-list">
             <div class="text-muted text-center py-3">
@@ -244,6 +249,34 @@
         } catch (error) {
             console.error('Error reconociendo alerta:', error);
             showAlertToast('Error al reconocer alerta', 'danger');
+        }
+    }
+    
+    // Borrar todas las alertas
+    async function clearAllAlerts() {
+        if (!confirm('¿Estás seguro de que deseas borrar TODAS las alertas activas?')) {
+            return;
+        }
+        
+        try {
+            const response = await fetch('/api/alerts/clear-all', {
+                method: 'POST'
+            });
+            
+            if (response.ok) {
+                const data = await response.json();
+                
+                // Recargar alertas
+                loadAlerts();
+                
+                // Mostrar feedback
+                showAlertToast(`✅ ${data.cleared} alertas borradas`, 'success');
+            } else {
+                showAlertToast('Error al borrar alertas', 'danger');
+            }
+        } catch (error) {
+            console.error('Error borrando alertas:', error);
+            showAlertToast('Error al borrar alertas', 'danger');
         }
     }
     

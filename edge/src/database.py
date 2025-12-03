@@ -49,7 +49,7 @@ from logger import logger
 DB_PATH = "edge_measurements.db"  # Se creará en edge/edge_measurements.db
 
 # Retención de datos (días)
-DEFAULT_RETENTION_DAYS = 30
+DEFAULT_RETENTION_DAYS = 2
 
 
 # ============================================================================

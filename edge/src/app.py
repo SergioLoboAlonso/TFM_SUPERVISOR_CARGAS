@@ -118,12 +118,15 @@ def init_modbus():
     # PASO 4: Inicializar servicios de alto nivel
     device_manager = DeviceManager(modbus_master, DataNormalizer())
     
-    # Inicializar motor de alertas con MQTT
-    alert_engine = AlertEngine(database, socketio, mqtt_bridge)
+    # Inicializar motor de alertas con MQTT (polling_service se asignará después)
+    alert_engine = AlertEngine(database, socketio, mqtt_bridge, polling_service=None)
     logger.info("✅ AlertEngine inicializado")
     
     # Polling service con alertas y MQTT integrados
     polling_service = PollingService(modbus_master, device_manager, database, alert_engine, mqtt_bridge)
+    
+    # Asignar polling_service al alert_engine para monitoreo de dispositivos activos
+    alert_engine.polling_service = polling_service
     
     # Iniciar monitoreo de estado de dispositivos (cada 10s)
     alert_engine.start_monitoring(interval=10)
@@ -178,6 +181,12 @@ def start_initial_discovery():
             # NUEVO: Registrar sensores en base de datos
             if devices and database:
                 _register_sensors_to_database(devices)
+            
+            # NUEVO: Publicar inventario a ThingsBoard/MQTT
+            if devices and mqtt_bridge:
+                import time
+                time.sleep(0.5)  # Breve pausa para asegurar que BD está actualizada
+                _publish_sensors_inventory()
             
             # NUEVO: Iniciar polling automáticamente si se encontraron dispositivos
             if devices and polling_service:
@@ -398,6 +407,54 @@ def emit_diagnostic(diagnostic_data: dict):
     logger.debug(f"🔍 WebSocket emit: diagnostic_update para unit {diagnostic_data.get('unit_id')}")
 
 
+def _publish_sensors_inventory():
+    """
+    Publica inventario completo de dispositivos y sensores a ThingsBoard.
+    
+    Esto permite que los dashboards se actualicen automáticamente cuando:
+    - Se descubren nuevos dispositivos
+    - Dispositivos cambian estado online/offline
+    - Se modifican configuraciones
+    """
+    if not mqtt_bridge or not database:
+        return
+    
+    try:
+        # Obtener todos los dispositivos de la BD
+        devices_data = database.get_all_devices(enabled_only=False)
+        
+        # Construir información enriquecida
+        devices_info = []
+        
+        for dev_data in devices_data:
+            unit_id = dev_data['unit_id']
+            
+            # Obtener lista de sensores para este dispositivo
+            sensors = database.get_sensors_by_device(unit_id)
+            sensor_ids = [s['sensor_id'] for s in sensors] if sensors else []
+            
+            # Determinar estado online (desde polling_service si está disponible)
+            online = False
+            if polling_service and hasattr(polling_service, '_device_online_state'):
+                online = polling_service._device_online_state.get(unit_id, False)
+            
+            devices_info.append({
+                'unit_id': unit_id,
+                'alias': dev_data.get('alias', f"Unit_{unit_id}"),
+                'capabilities': dev_data.get('capabilities', []),
+                'enabled': dev_data.get('enabled', True),
+                'online': online,
+                'sensors': sensor_ids
+            })
+        
+        # Publicar inventario a MQTT
+        mqtt_bridge.publish_active_sensors_list(devices_info)
+        logger.info(f"📤 Inventario publicado a ThingsBoard: {len(devices_info)} dispositivos")
+        
+    except Exception as e:
+        logger.error(f"❌ Error al publicar inventario: {e}", exc_info=True)
+
+
 # ============================================================================
 # RUTAS WEB (HTML)
 # ============================================================================
@@ -582,6 +639,30 @@ def api_devices():
     """Lista todos los dispositivos en caché"""
     devices = device_manager.get_all_devices()
     return jsonify([d.to_dict() for d in devices])
+
+
+@app.route('/api/mqtt/inventory/publish', methods=['POST'])
+def api_publish_inventory():
+    """
+    Fuerza la publicación del inventario de dispositivos y sensores a ThingsBoard.
+    
+    Útil para:
+    - Sincronizar manualmente después de cambios de configuración
+    - Recuperación después de desconexiones MQTT
+    - Testing/debugging de dashboards
+    """
+    try:
+        _publish_sensors_inventory()
+        return jsonify({
+            'status': 'ok',
+            'message': 'Inventario publicado a ThingsBoard correctamente'
+        })
+    except Exception as e:
+        logger.error(f"Error al publicar inventario: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
 
 
 @app.route('/api/devices/<int:unit_id>', methods=['GET'])
@@ -1211,6 +1292,88 @@ def api_alert_stats():
     
     except Exception as e:
         logger.error(f"Error getting alert stats: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/alerts/clear-all', methods=['POST'])
+def api_clear_all_alerts():
+    """
+    Auto-reconoce TODAS las alertas activas del sistema.
+    
+    Returns:
+        JSON: Número de alertas reconocidas
+    
+    Example:
+        POST /api/alerts/clear-all
+        {
+            "cleared": 36,
+            "message": "36 alertas reconocidas"
+        }
+    """
+    if not alert_engine or not database:
+        return jsonify({'error': 'Services not initialized'}), 500
+    
+    try:
+        # Obtener todas las alertas activas
+        active_alerts = database.get_alerts(ack=False, limit=10000)
+        cleared_count = 0
+        
+        for alert in active_alerts:
+            alert_id = alert.get('id')
+            database.acknowledge_alert(alert_id)
+            cleared_count += 1
+            
+            # Emitir evento de reconocimiento
+            if socketio:
+                socketio.emit('alert_acknowledged', {
+                    'alert_id': alert_id,
+                    'auto': True,
+                    'reason': 'Limpieza masiva manual'
+                }, namespace='/')
+        
+        logger.warning(f"🧹 Limpieza masiva: {cleared_count} alertas reconocidas manualmente")
+        
+        return jsonify({
+            'cleared': cleared_count,
+            'message': f'{cleared_count} alertas reconocidas'
+        })
+    
+    except Exception as e:
+        logger.error(f"Error clearing all alerts: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/alerts/clear-device/<int:unit_id>', methods=['POST'])
+def api_clear_device_alerts(unit_id):
+    """
+    Auto-reconoce todas las alertas de un dispositivo específico.
+    
+    Args:
+        unit_id: ID del dispositivo
+    
+    Returns:
+        JSON: Número de alertas reconocidas
+    
+    Example:
+        POST /api/alerts/clear-device/2
+        {
+            "cleared": 12,
+            "message": "12 alertas del dispositivo 2 reconocidas"
+        }
+    """
+    if not alert_engine:
+        return jsonify({'error': 'Alert engine not initialized'}), 500
+    
+    try:
+        alert_engine.clear_device_alerts(unit_id)
+        
+        return jsonify({
+            'unit_id': unit_id,
+            'message': f'Alertas del dispositivo {unit_id} reconocidas'
+        })
+    
+    except Exception as e:
+        logger.error(f"Error clearing device alerts: {e}")
         return jsonify({'error': str(e)}), 500
 
 

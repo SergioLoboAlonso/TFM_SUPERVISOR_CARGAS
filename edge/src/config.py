@@ -45,13 +45,15 @@ class Config:
     LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO').upper()  # INFO para producción, DEBUG para desarrollo
     LOG_FILE = os.getenv('LOG_FILE', 'edge.log')
     
-    # MQTT (opcional)
+    # MQTT / ThingsBoard (opcional)
     MQTT_BROKER_HOST = os.getenv('MQTT_BROKER_HOST')
     MQTT_BROKER_PORT = int(os.getenv('MQTT_BROKER_PORT', '1883'))
     MQTT_USERNAME = os.getenv('MQTT_USERNAME')
     MQTT_PASSWORD = os.getenv('MQTT_PASSWORD')
     MQTT_QOS = int(os.getenv('MQTT_QOS', '1'))
     MQTT_TOPIC_PREFIX = os.getenv('MQTT_TOPIC_PREFIX', 'tfm/devices')
+    THINGSBOARD_ENDPOINT = os.getenv('THINGSBOARD_ENDPOINT')
+    EDGE_GATEWAY_NAME = os.getenv('EDGE_GATEWAY_NAME', 'EdgeGateway')
     
     @classmethod
     def validate(cls):

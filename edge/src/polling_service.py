@@ -46,8 +46,10 @@ from datetime import datetime
 from modbus_master import ModbusMaster
 from device_manager import DeviceManager
 from data_normalizer import DataNormalizer
+from database import Database
 from logger import logger
 from config import Config
+from alert_engine import AlertEngine
 
 
 class PollingService:
@@ -63,10 +65,13 @@ class PollingService:
     IR_TOTAL_WITH_WIND_AND_STATS = 13 + 2 + 3 + 9  # 27
     MIN_INTERVAL_SEC = 0.2  # Evita saturar el bus/CPU con intervalos demasiado bajos
     
-    def __init__(self, modbus_master: ModbusMaster, device_manager: DeviceManager):
+    def __init__(self, modbus_master: ModbusMaster, device_manager: DeviceManager, database: Database = None, alert_engine: AlertEngine = None, mqtt_bridge=None):
         self.modbus = modbus_master
         self.device_mgr = device_manager
         self.normalizer = DataNormalizer()
+        self.db = database  # Base de datos para persistencia
+        self.alert_engine = alert_engine  # Motor de alertas
+        self.mqtt_bridge = mqtt_bridge  # Puente MQTT para IoT platforms
 
         # Cache último paquete de telemetría por unit_id
         self._last_telemetry: dict[int, dict] = {}
@@ -231,6 +236,14 @@ class PollingService:
                             self._consec_errors[unit_id] = 0
                             # Guardar último paquete
                             self._last_telemetry[unit_id] = telemetry_data
+                            
+                            # Actualizar last_seen del dispositivo
+                            if self.db:
+                                self.db.update_device_last_seen(unit_id)
+                            
+                            # Guardar en BD si está disponible
+                            if self.db:
+                                self._save_to_database(telemetry_data)
                         else:
                             # Aumentar contador y aplicar backoff adaptativo
                             self._consec_errors[unit_id] = self._consec_errors.get(unit_id, 0) + 1
@@ -578,3 +591,241 @@ class PollingService:
         except Exception as e:
             logger.error(f"Error al leer diagnósticos de unit {unit_id}: {e}")
             return None
+    
+    def _publish_measurement_to_mqtt(self, unit_id: int, sensor_id: str, sensor_type: str, value: float, unit: str, timestamp: str):
+        """
+        Helper para publicar medida via MQTT bridge.
+        
+        Args:
+            unit_id: ID del dispositivo Modbus
+            sensor_id: ID completo del sensor (ej: "UNIT_2_TILT_X")
+            sensor_type: Tipo de sensor (tilt, wind, temperature, etc.)
+            value: Valor medido
+            unit: Unidad de medida
+            timestamp: ISO8601 timestamp
+        """
+        if self.mqtt_bridge:
+            device_id = f"unit_{unit_id}"
+            self.mqtt_bridge.publish_measurement(
+                device_id=device_id,
+                sensor_id=sensor_id,
+                sensor_type=sensor_type,
+                value=value,
+                unit=unit,
+                timestamp=timestamp,
+                quality="GOOD"
+            )
+    
+    
+    def _save_to_database(self, telemetry_data: dict):
+        """
+        Guarda telemetría en la base de datos y publica a MQTT.
+        
+        Estrategia:
+            - Extrae todos los valores numéricos del paquete de telemetría
+            - Cada magnitud (angle_x, angle_y, temp, accel_x, wind_speed, etc.) 
+              se guarda como una medida separada
+            - El sensor_id se construye como "UNIT_{unit_id}_{tipo}"
+            - Permite consultas granulares y agregación flexible para ThingsBoard
+            - Publica cada medida a MQTT para integración con plataformas IoT
+        
+        Args:
+            telemetry_data: Dict con telemetría desde _read_telemetry()
+        """
+        if not telemetry_data or telemetry_data.get('status') != 'ok':
+            return
+        
+        try:
+            unit_id = telemetry_data['unit_id']
+            alias = telemetry_data.get('alias', f"Unit_{unit_id}")
+            timestamp = telemetry_data['timestamp']
+            telemetry = telemetry_data.get('telemetry', {})
+            
+            # Obtener capabilities del dispositivo para determinar tipo
+            device = self.device_mgr.get_device(unit_id)
+            capabilities = set(device.capabilities) if device and device.capabilities else set()
+            
+            # Determinar tipo principal del sensor
+            # Prioridad: MPU6050 > Wind > Load
+            if 'MPU6050' in capabilities:
+                main_type = 'tilt'
+            elif 'Wind' in capabilities:
+                main_type = 'wind'
+            elif 'Load' in capabilities:
+                main_type = 'load'
+            else:
+                main_type = 'generic'
+            
+            # MEDIDAS DE INCLINACIÓN (MPU6050)
+            if 'angle_x_deg' in telemetry:
+                sensor_id = f"UNIT_{unit_id}_TILT_X"
+                value = telemetry['angle_x_deg']
+                
+                self.db.insert_measurement({
+                    'sensor_id': sensor_id,
+                    'type': 'tilt',
+                    'value': value,
+                    'unit': 'deg',
+                    'quality': 'OK',
+                    'timestamp': timestamp
+                })
+                
+                # Publicar a MQTT
+                self._publish_measurement_to_mqtt(unit_id, sensor_id, 'tilt', value, 'deg', timestamp)
+                
+                # Verificar umbrales de alerta
+                if self.alert_engine:
+                    sensor_info = self.db.get_sensor(sensor_id)
+                    if sensor_info:
+                        self.alert_engine.check_measurement_thresholds(
+                            sensor_id, value, sensor_info
+                        )
+            
+            if 'angle_y_deg' in telemetry:
+                sensor_id = f"UNIT_{unit_id}_TILT_Y"
+                value = telemetry['angle_y_deg']
+                
+                self.db.insert_measurement({
+                    'sensor_id': sensor_id,
+                    'type': 'tilt',
+                    'value': value,
+                    'unit': 'deg',
+                    'quality': 'OK',
+                    'timestamp': timestamp
+                })
+                
+                # Publicar a MQTT
+                self._publish_measurement_to_mqtt(unit_id, sensor_id, 'tilt', value, 'deg', timestamp)
+                
+                # Verificar umbrales de alerta
+                if self.alert_engine:
+                    sensor_info = self.db.get_sensor(sensor_id)
+                    if sensor_info:
+                        self.alert_engine.check_measurement_thresholds(
+                            sensor_id, value, sensor_info
+                        )
+            
+            # TEMPERATURA (MPU6050)
+            if 'temperature_c' in telemetry:
+                sensor_id = f"UNIT_{unit_id}_TEMP"
+                value = telemetry['temperature_c']
+                
+                self.db.insert_measurement({
+                    'sensor_id': sensor_id,
+                    'type': 'temperature',
+                    'value': value,
+                    'unit': 'celsius',
+                    'quality': 'OK',
+                    'timestamp': timestamp
+                })
+                
+                # Publicar a MQTT
+                self._publish_measurement_to_mqtt(unit_id, sensor_id, 'temperature', value, 'celsius', timestamp)
+                
+                # Verificar umbrales de alerta
+                if self.alert_engine:
+                    sensor_info = self.db.get_sensor(sensor_id)
+                    if sensor_info:
+                        self.alert_engine.check_measurement_thresholds(
+                            sensor_id, value, sensor_info
+                        )
+            
+            # ACELERACIÓN (MPU6050) - Guardamos la magnitud total
+            if 'acceleration' in telemetry:
+                accel = telemetry['acceleration']
+                # Magnitud vectorial: sqrt(x² + y² + z²)
+                import math
+                magnitude = math.sqrt(
+                    accel.get('x_g', 0)**2 + 
+                    accel.get('y_g', 0)**2 + 
+                    accel.get('z_g', 0)**2
+                )
+                self.db.insert_measurement({
+                    'sensor_id': f"UNIT_{unit_id}_ACCEL",
+                    'type': 'acceleration',
+                    'value': magnitude,
+                    'unit': 'g',
+                    'quality': 'OK',
+                    'timestamp': timestamp
+                })
+                
+                # También guardamos componentes individuales para análisis detallado
+                for axis, key in [('X', 'x_g'), ('Y', 'y_g'), ('Z', 'z_g')]:
+                    if key in accel:
+                        self.db.insert_measurement({
+                            'sensor_id': f"UNIT_{unit_id}_ACCEL_{axis}",
+                            'type': 'acceleration',
+                            'value': accel[key],
+                            'unit': 'g',
+                            'quality': 'OK',
+                            'timestamp': timestamp
+                        })
+            
+            # GIROSCOPIO (MPU6050) - Guardamos magnitud de velocidad angular
+            if 'gyroscope' in telemetry:
+                gyro = telemetry['gyroscope']
+                import math
+                magnitude = math.sqrt(
+                    gyro.get('x_dps', 0)**2 + 
+                    gyro.get('y_dps', 0)**2 + 
+                    gyro.get('z_dps', 0)**2
+                )
+                self.db.insert_measurement({
+                    'sensor_id': f"UNIT_{unit_id}_GYRO",
+                    'type': 'gyroscope',
+                    'value': magnitude,
+                    'unit': 'dps',
+                    'quality': 'OK',
+                    'timestamp': timestamp
+                })
+            
+            # VIENTO
+            if 'wind_speed_mps' in telemetry:
+                sensor_id = f"UNIT_{unit_id}_WIND_SPEED"
+                value = telemetry['wind_speed_mps']
+                
+                self.db.insert_measurement({
+                    'sensor_id': sensor_id,
+                    'type': 'wind',
+                    'value': value,
+                    'unit': 'm_s',
+                    'quality': 'OK',
+                    'timestamp': timestamp
+                })
+                
+                # Publicar a MQTT
+                self._publish_measurement_to_mqtt(unit_id, sensor_id, 'wind', value, 'm_s', timestamp)
+                
+                # Verificar umbrales de alerta
+                if self.alert_engine:
+                    sensor_info = self.db.get_sensor(sensor_id)
+                    if sensor_info:
+                        self.alert_engine.check_measurement_thresholds(
+                            sensor_id, value, sensor_info
+                        )
+            
+            if 'wind_direction_deg' in telemetry:
+                self.db.insert_measurement({
+                    'sensor_id': f"UNIT_{unit_id}_WIND_DIR",
+                    'type': 'wind',
+                    'value': telemetry['wind_direction_deg'],
+                    'unit': 'deg',
+                    'quality': 'OK',
+                    'timestamp': timestamp
+                })
+            
+            # CARGA (HX711)
+            if 'load_kg' in telemetry:
+                self.db.insert_measurement({
+                    'sensor_id': f"UNIT_{unit_id}_LOAD",
+                    'type': 'load',
+                    'value': telemetry['load_kg'],
+                    'unit': 'kg',
+                    'quality': 'OK',
+                    'timestamp': timestamp
+                })
+            
+            logger.debug(f"💾 Telemetría de unit {unit_id} guardada en BD")
+            
+        except Exception as e:
+            logger.error(f"Error al guardar telemetría en BD: {e}")

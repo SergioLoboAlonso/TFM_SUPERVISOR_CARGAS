@@ -76,6 +76,7 @@
                     <li class="nav-item"><a class="nav-link {{ 'active' if request.path == '/' else '' }}" href="/">Dashboard</a></li>
                     <li class="nav-item"><a class="nav-link {{ 'active' if request.path.startswith('/config') else '' }}" href="/config">Configuración</a></li>
                     <li class="nav-item"><a class="nav-link {{ 'active' if request.path.startswith('/polling') else '' }}" href="/polling">Polling</a></li>
+                    <li class="nav-item"><a class="nav-link {{ 'active' if request.path.startswith('/history') else '' }}" href="/history">📈 Historial</a></li>
                 </ul>
             </div>
         </div>

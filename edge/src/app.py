@@ -26,6 +26,9 @@ from modbus_master import ModbusMaster
 from device_manager import DeviceManager
 from data_normalizer import DataNormalizer
 from polling_service import PollingService
+from database import Database, init_db
+from alert_engine import AlertEngine
+from mqtt_bridge import MQTTBridge
 import threading
 
 # Inicializar Flask
@@ -41,6 +44,9 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 modbus_master: ModbusMaster = None
 device_manager: DeviceManager = None
 polling_service: PollingService = None
+database: Database = None
+alert_engine: AlertEngine = None
+mqtt_bridge = None  # Puente MQTT para IoT platforms
 
 # Estado del discovery
 discovery_state = {
@@ -50,23 +56,50 @@ discovery_state = {
     'unit_id': 0
 }
 
-
 def init_modbus():
     """
     Inicializa la stack completa de comunicación Modbus RTU y servicios.
     
     Secuencia de inicialización:
-        1. ModbusMaster → Abre puerto serie RS-485
-        2. DeviceManager → Gestiona identidad y comandos de dispositivos
-        3. PollingService → Thread background para telemetría continua
-        4. Callbacks → Conecta eventos de polling con WebSocket
+        1. Database → Inicializa base de datos SQLite
+        2. ModbusMaster → Abre puerto serie RS-485
+        3. DeviceManager → Gestiona identidad y comandos de dispositivos
+        4. AlertEngine → Motor de alertas
+        5. PollingService → Thread background para telemetría continua
+        6. Callbacks → Conecta eventos de polling con WebSocket
     
     Returns:
         bool: True si inicialización exitosa, False si error
     """
-    global modbus_master, device_manager, polling_service
+    global modbus_master, device_manager, polling_service, database, alert_engine, mqtt_bridge
     
-    # PASO 1: Validar configuración del puerto serie
+    # PASO 1: Inicializar base de datos
+    try:
+        logger.info("Inicializando base de datos SQLite...")
+        init_db()  # Crear esquema si no existe
+        database = Database()
+        logger.info("✅ Base de datos inicializada")
+        
+        # Limpieza de datos antiguos (opcional)
+        deleted = database.cleanup_old_data(days=30)
+        if deleted > 0:
+            logger.info(f"🗑️ Limpieza inicial: {deleted} medidas antiguas eliminadas")
+    except Exception as e:
+        logger.error(f"Error al inicializar base de datos: {e}")
+        # Continuar sin BD (degraded mode)
+    
+    # PASO 1.5: Inicializar MQTT Bridge
+    try:
+        mqtt_bridge = MQTTBridge(database)
+        if mqtt_bridge.enabled:
+            logger.info("✅ MQTT Bridge habilitado")
+        else:
+            logger.info("ℹ️  MQTT Bridge deshabilitado (no configurado)")
+    except Exception as e:
+        logger.error(f"Error al inicializar MQTT Bridge: {e}")
+        mqtt_bridge = None
+    
+    # PASO 2: Determinar puerto (manual o autodetección)
     port = Config.MODBUS_PORT
     if port == 'auto':
         logger.warning("Puerto configurado como 'auto', pero autodetección deshabilitada por usuario")
@@ -75,19 +108,28 @@ def init_modbus():
     
     logger.info(f"Inicializando Modbus Master en {port} @ {Config.MODBUS_BAUDRATE} baud")
     
-    # PASO 2: Crear y conectar el Modbus Master (cliente serie RTU)
+    # PASO 3: Crear y conectar el Modbus Master (cliente serie RTU)
     modbus_master = ModbusMaster(port=port, baudrate=Config.MODBUS_BAUDRATE)
     
     if not modbus_master.connect():
         logger.error("No se pudo conectar al puerto serie. Verifica el cable y el puerto.")
         return False
     
-    # PASO 3: Inicializar servicios de alto nivel
+    # PASO 4: Inicializar servicios de alto nivel
     device_manager = DeviceManager(modbus_master, DataNormalizer())
-    polling_service = PollingService(modbus_master, device_manager)
     
-    # PASO 4: Conectar callbacks para eventos WebSocket
-    # Estos callbacks permiten que el PollingService emita datos vía Socket.IO
+    # Inicializar motor de alertas con MQTT
+    alert_engine = AlertEngine(database, socketio, mqtt_bridge)
+    logger.info("✅ AlertEngine inicializado")
+    
+    # Polling service con alertas y MQTT integrados
+    polling_service = PollingService(modbus_master, device_manager, database, alert_engine, mqtt_bridge)
+    
+    # Iniciar monitoreo de estado de dispositivos (cada 10s)
+    alert_engine.start_monitoring(interval=10)
+    logger.info("🔄 Monitoreo de alertas iniciado")
+    
+    # PASO 5: Conectar callbacks para eventos WebSocket
     polling_service.on_telemetry_callback = emit_telemetry
     polling_service.on_diagnostic_callback = emit_diagnostic
     
@@ -133,6 +175,10 @@ def start_initial_discovery():
                 'devices': [d.to_dict() for d in devices]
             })
             
+            # NUEVO: Registrar sensores en base de datos
+            if devices and database:
+                _register_sensors_to_database(devices)
+            
             # NUEVO: Iniciar polling automáticamente si se encontraron dispositivos
             if devices and polling_service:
                 unit_ids = [d.unit_id for d in devices]
@@ -177,6 +223,167 @@ def start_initial_discovery():
     t.start()
 
 
+def _register_sensors_to_database(devices):
+    """
+    Registra dispositivos y sus sensores en la base de datos.
+    
+    Estrategia:
+        1. Registrar el dispositivo en tabla 'devices' (unit_id, alias, capabilities, rig_id)
+        2. Registrar cada sensor lógico en tabla 'sensors' (sensores individuales por capability)
+        3. Configurar umbrales de alarma predeterminados según el tipo
+    
+    Args:
+        devices: Lista de objetos Device del DeviceManager
+    """
+    if not database:
+        logger.warning("Base de datos no disponible, dispositivos no registrados")
+        return
+    
+    try:
+        import json
+        
+        for device in devices:
+            unit_id = device.unit_id
+            alias = device.alias or f"Unit_{unit_id}"
+            capabilities = list(device.capabilities) if device.capabilities else []
+            
+            # RIG_ID: Agrupamos por ubicación (por ahora, todos en RIG_01)
+            # En producción, esto podría leerse de un archivo de configuración
+            rig_id = "RIG_01"
+            
+            logger.info(f"📝 Registrando dispositivo {unit_id} ({alias}), caps={capabilities}")
+            
+            # PASO 1: Registrar el dispositivo en la tabla 'devices'
+            database.upsert_device({
+                'unit_id': unit_id,
+                'alias': alias,
+                'vendor_code': '0x4C6F',  # Código de fabricante (Lobo)
+                'capabilities': json.dumps(capabilities),
+                'rig_id': rig_id,
+                'firmware_version': None,  # TODO: obtener de Device si está disponible
+                'enabled': 1
+            })
+            
+            # PASO 2: Registrar sensores lógicos según capabilities
+            
+            # CAPABILITY: MPU6050 (acelerómetro + giroscopio + temperatura)
+            if 'MPU6050' in capabilities:
+                # Ángulo X
+                database.upsert_sensor({
+                    'sensor_id': f"UNIT_{unit_id}_TILT_X",
+                    'unit_id': unit_id,
+                    'type': 'tilt',
+                    'register': 0x0000,  # IR_MED_ANGULO_X_CDEG
+                    'unit': 'deg',
+                    'alarm_lo': -10.0,  # Umbral de inclinación crítica
+                    'alarm_hi': 10.0,
+                    'enabled': 1
+                })
+                
+                # Ángulo Y
+                database.upsert_sensor({
+                    'sensor_id': f"UNIT_{unit_id}_TILT_Y",
+                    'unit_id': unit_id,
+                    'type': 'tilt',
+                    'register': 0x0001,  # IR_MED_ANGULO_Y_CDEG
+                    'unit': 'deg',
+                    'alarm_lo': -10.0,
+                    'alarm_hi': 10.0,
+                    'enabled': 1
+                })
+                
+                # Temperatura
+                database.upsert_sensor({
+                    'sensor_id': f"UNIT_{unit_id}_TEMP",
+                    'unit_id': unit_id,
+                    'type': 'temperature',
+                    'register': 0x0002,  # IR_MED_TEMPERATURA_CENTI
+                    'unit': 'celsius',
+                    'alarm_lo': -10.0,  # Temperatura mínima operativa
+                    'alarm_hi': 60.0,   # Temperatura máxima operativa
+                    'enabled': 1
+                })
+                
+                # Aceleración (magnitud)
+                database.upsert_sensor({
+                    'sensor_id': f"UNIT_{unit_id}_ACCEL",
+                    'unit_id': unit_id,
+                    'type': 'acceleration',
+                    'register': 0x0003,  # IR_MED_ACEL_X_mG (primero del bloque)
+                    'unit': 'g',
+                    'alarm_lo': None,
+                    'alarm_hi': 2.0,  # Alerta si aceleración > 2g
+                    'enabled': 1
+                })
+                
+                # Giroscopio (magnitud)
+                database.upsert_sensor({
+                    'sensor_id': f"UNIT_{unit_id}_GYRO",
+                    'unit_id': unit_id,
+                    'type': 'gyroscope',
+                    'register': 0x0006,  # IR_MED_GIRO_X_mdps (primero del bloque)
+                    'unit': 'dps',
+                    'alarm_lo': None,
+                    'alarm_hi': 250.0,  # Alerta si velocidad angular > 250°/s
+                    'enabled': 1
+                })
+                
+                logger.info(f"   ✅ Sensores MPU6050 registrados para unit {unit_id}")
+            
+            # CAPABILITY: Wind (anemómetro)
+            if 'Wind' in capabilities:
+                # Velocidad de viento
+                database.upsert_sensor({
+                    'sensor_id': f"UNIT_{unit_id}_WIND_SPEED",
+                    'unit_id': unit_id,
+                    'type': 'wind',
+                    'register': 0x000D,  # IR_MED_VIENTO_VELOCIDAD
+                    'unit': 'm/s',
+                    'alarm_lo': None,
+                    'alarm_hi': 25.0,  # Alerta si viento > 25 m/s (~90 km/h)
+                    'enabled': 1
+                })
+                
+                # Dirección de viento
+                database.upsert_sensor({
+                    'sensor_id': f"UNIT_{unit_id}_WIND_DIR",
+                    'unit_id': unit_id,
+                    'type': 'wind',
+                    'register': 0x000E,  # IR_MED_VIENTO_DIRECCION
+                    'unit': 'deg',
+                    'alarm_lo': None,
+                    'alarm_hi': None,  # La dirección no tiene umbrales críticos
+                    'enabled': 1
+                })
+                
+                logger.info(f"   ✅ Sensores Wind registrados para unit {unit_id}")
+            
+            # CAPABILITY: Load (celda de carga HX711)
+            if 'Load' in capabilities:
+                database.upsert_sensor({
+                    'sensor_id': f"UNIT_{unit_id}_LOAD",
+                    'unit_id': unit_id,
+                    'type': 'load',
+                    'register': 0x000C,  # IR_MED_PESO_KG
+                    'unit': 'kg',
+                    'alarm_lo': -5.0,   # Carga negativa anómala
+                    'alarm_hi': 500.0,  # Sobrecarga
+                    'enabled': 1
+                })
+                
+                logger.info(f"   ✅ Sensor Load registrado para unit {unit_id}")
+        
+        logger.info(f"✅ Total de {len(devices)} dispositivos registrados en BD")
+        
+        # Estadísticas de sensores
+        stats = database.get_db_stats()
+        logger.info(f"📊 Dispositivos en BD: {stats.get('device_count', 'N/A')}")
+        logger.info(f"📊 Sensores en BD: {stats['sensor_count']}")
+        
+    except Exception as e:
+        logger.error(f"Error al registrar sensores en BD: {e}")
+
+
 def emit_telemetry(telemetry_data: dict):
     """Emite telemetría vía WebSocket (desde thread background)"""
     with app.app_context():
@@ -217,6 +424,12 @@ def polling():
 def diagnostic():
     """Ventana de diagnóstico de dispositivos"""
     return render_template('diagnostic.html')
+
+
+@app.route('/history')
+def history():
+    """Ventana de visualización de datos históricos"""
+    return render_template('history.html')
 
 
 # ============================================================================
@@ -281,6 +494,10 @@ def api_discover():
                 'devices_found': len(devices),
                 'devices': [d.to_dict() for d in devices]
             })
+            
+            # NUEVO: Registrar sensores en base de datos
+            if devices and database:
+                _register_sensors_to_database(devices)
             
             # Si el polling está activo, añadir nuevos dispositivos automáticamente
             if devices and polling_service and polling_service.is_active():
@@ -721,6 +938,280 @@ def handle_connect():
 def handle_disconnect():
     """Cliente WebSocket desconectado"""
     logger.info("Cliente WebSocket desconectado")
+
+
+# ============================================================================
+# API REST - HISTORIAL (DATABASE)
+# ============================================================================
+
+@app.route('/api/history/stats', methods=['GET'])
+def api_history_stats():
+    """Estadísticas de la base de datos"""
+    if not database:
+        return jsonify({'error': 'Database not available'}), 500
+    
+    try:
+        stats = database.get_db_stats()
+        return jsonify(stats)
+    except Exception as e:
+        logger.error(f"Error getting DB stats: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/history/devices', methods=['GET'])
+def api_history_devices():
+    """Lista de dispositivos registrados en la BD"""
+    if not database:
+        return jsonify({'error': 'Database not available'}), 500
+    
+    try:
+        devices = database.get_all_devices(enabled_only=False)
+        return jsonify({'devices': devices})
+    except Exception as e:
+        logger.error(f"Error getting devices: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/history/sensors/<int:unit_id>', methods=['GET'])
+def api_history_sensors(unit_id):
+    """Sensores de un dispositivo específico"""
+    if not database:
+        return jsonify({'error': 'Database not available'}), 500
+    
+    try:
+        device = database.get_device(unit_id)
+        if not device:
+            return jsonify({'error': 'Device not found'}), 404
+        
+        sensors = database.get_sensors_by_device(unit_id, enabled_only=False)
+        return jsonify({
+            'device': device,
+            'sensors': sensors
+        })
+    except Exception as e:
+        logger.error(f"Error getting sensors for device {unit_id}: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/history/data/<sensor_id>', methods=['GET'])
+def api_history_data(sensor_id):
+    """Datos históricos de un sensor"""
+    if not database:
+        return jsonify({'error': 'Database not available'}), 500
+    
+    try:
+        # Obtener parámetros de tiempo
+        hours = request.args.get('hours', type=int)
+        start_str = request.args.get('start')
+        end_str = request.args.get('end')
+        
+        # Determinar rango temporal
+        if start_str and end_str:
+            # Rango personalizado
+            from datetime import datetime
+            start_time = datetime.fromisoformat(start_str.replace('Z', '+00:00'))
+            end_time = datetime.fromisoformat(end_str.replace('Z', '+00:00'))
+            
+            # Obtener medidas en el rango
+            measurements = database.get_measurements(
+                sensor_id=sensor_id,
+                since=start_time,
+                limit=10000  # Límite alto para rango personalizado
+            )
+            
+            # Filtrar por end_time manualmente
+            measurements = [m for m in measurements if m['timestamp'] <= end_time.isoformat() + 'Z']
+            
+        elif hours:
+            # Rango por horas desde ahora
+            from datetime import datetime, timedelta
+            since = datetime.utcnow() - timedelta(hours=hours)
+            measurements = database.get_measurements(
+                sensor_id=sensor_id,
+                since=since,
+                limit=10000
+            )
+        else:
+            # Por defecto: últimas 24 horas
+            from datetime import datetime, timedelta
+            since = datetime.utcnow() - timedelta(hours=24)
+            measurements = database.get_measurements(
+                sensor_id=sensor_id,
+                since=since,
+                limit=10000
+            )
+        
+        if not measurements:
+            return jsonify({
+                'sensor_id': sensor_id,
+                'measurements': [],
+                'stats': {
+                    'count': 0,
+                    'min': 0,
+                    'max': 0,
+                    'avg': 0
+                },
+                'unit': ''
+            })
+        
+        # Calcular estadísticas
+        values = [m['value'] for m in measurements]
+        stats = {
+            'count': len(values),
+            'min': min(values),
+            'max': max(values),
+            'avg': sum(values) / len(values)
+        }
+        
+        # Obtener unidad del primer measurement
+        unit = measurements[0]['unit'] if measurements else ''
+        
+        return jsonify({
+            'sensor_id': sensor_id,
+            'measurements': measurements,
+            'stats': stats,
+            'unit': unit
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting data for sensor {sensor_id}: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+# ============================================================================
+# API: ALERTAS
+# ============================================================================
+
+@app.route('/api/alerts', methods=['GET'])
+def api_get_alerts():
+    """
+    Obtiene alertas con filtros opcionales.
+    
+    Query params:
+        - ack: "true" (reconocidas) / "false" (activas) / omitir (todas)
+        - level: "INFO" / "WARN" / "ALARM" / "CRITICAL"
+        - limit: Número máximo de alertas (default: 100)
+    
+    Returns:
+        JSON: Lista de alertas
+    
+    Example:
+        GET /api/alerts?ack=false&level=ALARM&limit=50
+        {
+            "alerts": [
+                {
+                    "id": 123,
+                    "timestamp": "2025-12-03T20:00:00Z",
+                    "sensor_id": "UNIT_2_TILT_X",
+                    "rig_id": "RIG_01",
+                    "level": "ALARM",
+                    "code": "THRESHOLD_EXCEEDED_HI",
+                    "message": "Sensor UNIT_2_TILT_X: valor 6.20 deg supera el umbral superior 5.00 deg",
+                    "ack": 0
+                },
+                ...
+            ],
+            "count": 50
+        }
+    """
+    if not database:
+        return jsonify({'error': 'Database not initialized'}), 500
+    
+    try:
+        # Parsear parámetros de query
+        ack_str = request.args.get('ack')
+        level = request.args.get('level')
+        limit = int(request.args.get('limit', 100))
+        
+        # Convertir ack a bool si está presente
+        ack = None
+        if ack_str == 'true':
+            ack = True
+        elif ack_str == 'false':
+            ack = False
+        
+        # Obtener alertas
+        alerts = database.get_alerts(ack=ack, level=level, limit=limit)
+        
+        return jsonify({
+            'alerts': alerts,
+            'count': len(alerts)
+        })
+    
+    except ValueError as e:
+        return jsonify({'error': f'Invalid parameter: {e}'}), 400
+    except Exception as e:
+        logger.error(f"Error getting alerts: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/alerts/<int:alert_id>/acknowledge', methods=['POST'])
+def api_acknowledge_alert(alert_id: int):
+    """
+    Marca una alerta como reconocida.
+    
+    Args:
+        alert_id: ID de la alerta
+    
+    Returns:
+        JSON: Confirmación
+    
+    Example:
+        POST /api/alerts/123/acknowledge
+        {
+            "success": true,
+            "alert_id": 123,
+            "message": "Alert acknowledged"
+        }
+    """
+    if not database or not alert_engine:
+        return jsonify({'error': 'Services not initialized'}), 500
+    
+    try:
+        alert_engine.acknowledge_alert(alert_id)
+        
+        return jsonify({
+            'success': True,
+            'alert_id': alert_id,
+            'message': 'Alert acknowledged'
+        })
+    
+    except Exception as e:
+        logger.error(f"Error acknowledging alert {alert_id}: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/alerts/stats', methods=['GET'])
+def api_alert_stats():
+    """
+    Obtiene estadísticas de alertas.
+    
+    Returns:
+        JSON: Estadísticas de alertas
+    
+    Example:
+        GET /api/alerts/stats
+        {
+            "total_active": 15,
+            "by_level": {
+                "INFO": 2,
+                "WARN": 5,
+                "ALARM": 7,
+                "CRITICAL": 1
+            },
+            "recent_count": 8
+        }
+    """
+    if not alert_engine:
+        return jsonify({'error': 'Alert engine not initialized'}), 500
+    
+    try:
+        stats = alert_engine.get_alert_stats()
+        return jsonify(stats)
+    
+    except Exception as e:
+        logger.error(f"Error getting alert stats: {e}")
+        return jsonify({'error': str(e)}), 500
 
 
 # ============================================================================

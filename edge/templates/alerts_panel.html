@@ -1,0 +1,309 @@
+<!-- Panel de Alertas Flotante - Componente Reutilizable -->
+<div id="alerts-panel" class="alerts-panel">
+    <div class="alerts-header" onclick="toggleAlertsPanel()">
+        <span>
+            <strong>🚨 Alertas</strong>
+            <span class="badge bg-danger ms-2" id="alerts-count">0</span>
+        </span>
+        <span id="alerts-toggle-icon">▲</span>
+    </div>
+    <div id="alerts-content" class="alerts-content">
+        <div class="alerts-stats mb-2">
+            <span class="badge bg-danger me-1" id="stat-alarm">0 ALARM</span>
+            <span class="badge bg-warning text-dark me-1" id="stat-warn">0 WARN</span>
+            <span class="badge bg-info me-1" id="stat-info">0 INFO</span>
+        </div>
+        <div id="alerts-list" class="alerts-list">
+            <div class="text-muted text-center py-3">
+                <small>Cargando alertas...</small>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+    .alerts-panel {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background: white;
+        border-top: 3px solid #dc3545;
+        box-shadow: 0 -2px 10px rgba(0,0,0,0.2);
+        z-index: 1000;
+        transition: transform 0.3s ease;
+    }
+    
+    .alerts-panel.collapsed {
+        transform: translateY(calc(100% - 45px));
+    }
+    
+    .alerts-header {
+        padding: 12px 20px;
+        background: #f8f9fa;
+        border-bottom: 1px solid #dee2e6;
+        cursor: pointer;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        user-select: none;
+    }
+    
+    .alerts-header:hover {
+        background: #e9ecef;
+    }
+    
+    .alerts-content {
+        padding: 15px 20px;
+        max-height: 300px;
+        overflow-y: auto;
+    }
+    
+    .alerts-stats {
+        display: flex;
+        gap: 5px;
+        flex-wrap: wrap;
+    }
+    
+    .alerts-list {
+        margin-top: 10px;
+    }
+    
+    .alert-item {
+        padding: 10px;
+        margin-bottom: 8px;
+        border-left: 4px solid;
+        background: #f8f9fa;
+        border-radius: 4px;
+        font-size: 0.9rem;
+    }
+    
+    .alert-item.level-ALARM {
+        border-left-color: #dc3545;
+        background: #f8d7da;
+    }
+    
+    .alert-item.level-WARN {
+        border-left-color: #ffc107;
+        background: #fff3cd;
+    }
+    
+    .alert-item.level-INFO {
+        border-left-color: #0dcaf0;
+        background: #cff4fc;
+    }
+    
+    .alert-item.level-CRITICAL {
+        border-left-color: #6f42c1;
+        background: #e0cffc;
+    }
+    
+    .alert-timestamp {
+        font-size: 0.75rem;
+        color: #6c757d;
+    }
+    
+    .alert-message {
+        margin: 5px 0;
+    }
+    
+    .alert-actions {
+        margin-top: 5px;
+    }
+    
+    .btn-ack {
+        font-size: 0.75rem;
+        padding: 2px 8px;
+    }
+</style>
+
+<script>
+    // ============================================================================
+    // SISTEMA DE ALERTAS - Script Reutilizable
+    // ============================================================================
+    
+    let alertsCollapsed = false;
+    let alertsSocket = null;
+    
+    // Toggle panel de alertas
+    function toggleAlertsPanel() {
+        alertsCollapsed = !alertsCollapsed;
+        const panel = document.getElementById('alerts-panel');
+        const icon = document.getElementById('alerts-toggle-icon');
+        
+        if (alertsCollapsed) {
+            panel.classList.add('collapsed');
+            icon.textContent = '▼';
+        } else {
+            panel.classList.remove('collapsed');
+            icon.textContent = '▲';
+        }
+    }
+    
+    // Cargar alertas desde API
+    async function loadAlerts() {
+        try {
+            const response = await fetch('/api/alerts?ack=false&limit=20');
+            const data = await response.json();
+            
+            updateAlertsUI(data.alerts);
+            updateAlertsStats();
+        } catch (error) {
+            console.error('Error cargando alertas:', error);
+        }
+    }
+    
+    // Actualizar UI con lista de alertas
+    function updateAlertsUI(alerts) {
+        const list = document.getElementById('alerts-list');
+        const countBadge = document.getElementById('alerts-count');
+        const countBadgeNav = document.getElementById('alerts-count-badge');
+        
+        // Actualizar contador
+        const count = alerts.length;
+        countBadge.textContent = count;
+        if (countBadgeNav) {
+            countBadgeNav.textContent = count;
+        }
+        
+        if (count === 0) {
+            list.innerHTML = '<div class="text-muted text-center py-3"><small>✅ No hay alertas activas</small></div>';
+            return;
+        }
+        
+        // Renderizar alertas
+        list.innerHTML = alerts.map(alert => {
+            const timestamp = new Date(alert.timestamp).toLocaleString('es-ES');
+            const levelBadge = getLevelBadge(alert.level);
+            
+            return `
+                <div class="alert-item level-${alert.level}">
+                    <div class="d-flex justify-content-between align-items-start">
+                        <div>
+                            ${levelBadge}
+                            <strong>${alert.code}</strong>
+                        </div>
+                        <span class="alert-timestamp">${timestamp}</span>
+                    </div>
+                    <div class="alert-message">
+                        ${alert.message}
+                    </div>
+                    ${alert.sensor_id ? `<small class="text-muted">Sensor: ${alert.sensor_id}</small>` : ''}
+                    <div class="alert-actions">
+                        <button class="btn btn-sm btn-outline-success btn-ack" onclick="acknowledgeAlert(${alert.id})">
+                            ✓ Reconocer
+                        </button>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    }
+    
+    // Badge según nivel
+    function getLevelBadge(level) {
+        const badges = {
+            'CRITICAL': '<span class="badge bg-purple">CRÍTICO</span>',
+            'ALARM': '<span class="badge bg-danger">ALARMA</span>',
+            'WARN': '<span class="badge bg-warning text-dark">AVISO</span>',
+            'INFO': '<span class="badge bg-info">INFO</span>'
+        };
+        return badges[level] || '<span class="badge bg-secondary">-</span>';
+    }
+    
+    // Actualizar estadísticas
+    async function updateAlertsStats() {
+        try {
+            const response = await fetch('/api/alerts/stats');
+            const stats = await response.json();
+            
+            document.getElementById('stat-alarm').textContent = 
+                `${stats.by_level.ALARM + stats.by_level.CRITICAL} ALARM`;
+            document.getElementById('stat-warn').textContent = 
+                `${stats.by_level.WARN} WARN`;
+            document.getElementById('stat-info').textContent = 
+                `${stats.by_level.INFO} INFO`;
+        } catch (error) {
+            console.error('Error cargando stats:', error);
+        }
+    }
+    
+    // Reconocer alerta
+    async function acknowledgeAlert(alertId) {
+        try {
+            const response = await fetch(`/api/alerts/${alertId}/acknowledge`, {
+                method: 'POST'
+            });
+            
+            if (response.ok) {
+                // Recargar alertas
+                loadAlerts();
+                
+                // Mostrar feedback
+                showAlertToast('Alerta reconocida', 'success');
+            }
+        } catch (error) {
+            console.error('Error reconociendo alerta:', error);
+            showAlertToast('Error al reconocer alerta', 'danger');
+        }
+    }
+    
+    // Toast de notificación
+    function showAlertToast(message, type = 'info') {
+        const alertDiv = document.createElement('div');
+        alertDiv.className = `alert alert-${type} alert-dismissible fade show position-fixed top-0 start-50 translate-middle-x mt-3`;
+        alertDiv.style.zIndex = '9999';
+        alertDiv.innerHTML = `
+            ${message}
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        `;
+        document.body.appendChild(alertDiv);
+        
+        setTimeout(() => {
+            alertDiv.remove();
+        }, 3000);
+    }
+    
+    // Inicializar WebSocket para alertas en tiempo real
+    function initAlertsWebSocket() {
+        // Verificar si Socket.IO está disponible
+        if (typeof io === 'undefined') {
+            console.warn('Socket.IO no disponible, alertas solo se actualizarán por polling');
+            return;
+        }
+        
+        alertsSocket = io();
+        
+        alertsSocket.on('connect', () => {
+            console.log('✅ WebSocket conectado para alertas');
+        });
+        
+        alertsSocket.on('new_alert', (alert) => {
+            console.log('🚨 Nueva alerta:', alert);
+            
+            // Recargar alertas
+            loadAlerts();
+            
+            // Notificación visual
+            showAlertToast(`🚨 ${alert.level}: ${alert.code}`, 'warning');
+            
+            // Expandir panel si está colapsado
+            if (alertsCollapsed) {
+                toggleAlertsPanel();
+            }
+        });
+        
+        alertsSocket.on('alert_acknowledged', (data) => {
+            console.log('✅ Alerta reconocida:', data.alert_id);
+            loadAlerts();
+        });
+    }
+    
+    // Inicializar al cargar (se llama desde cada página)
+    function initAlertsSystem() {
+        loadAlerts();
+        initAlertsWebSocket();
+        
+        // Refrescar alertas cada 30 segundos
+        setInterval(loadAlerts, 30000);
+    }
+</script>

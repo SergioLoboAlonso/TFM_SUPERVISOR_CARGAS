@@ -1,0 +1,267 @@
+```
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃                        ARQUITECTURA EDGE → THINGSBOARD                     ┃
+┃                         Sistema IIoT con SQLite Local                      ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           RASPBERRY PI (Edge Layer)                         │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  ┌──────────────┐  Modbus RTU (RS-485, 115200 baud)                        │
+│  │              │  ┌──────────┐  ┌──────────┐  ┌──────────┐               │
+│  │  Modbus      ├──┤ Arduino  │  │ Arduino  │  │ Arduino  │               │
+│  │  Master      │  │  UnitID=1│  │  UnitID=2│  │  UnitID=3│               │
+│  │              │  └──────────┘  └──────────┘  └──────────┘               │
+│  └──────┬───────┘       │              │             │                     │
+│         │          ┌────┴──────────────┴─────────────┴────┐                │
+│         │          │   MPU6050   │   Wind    │   Load     │                │
+│         │          │  (Tilt)     │  (Anem.)  │  (HX711)   │                │
+│         │          └─────────────────────────────────────┘                 │
+│         │                                                                   │
+│         ▼                                                                   │
+│  ┌──────────────────────────────────────────────────────────────┐          │
+│  │             PollingService (Background Thread)               │          │
+│  ├──────────────────────────────────────────────────────────────┤          │
+│  │  • Lee telemetría cada 2s                                    │          │
+│  │  • Normaliza datos (data_normalizer)                         │          │
+│  │  • Emite WebSocket (tiempo real)                             │          │
+│  │  • Guarda en SQLite ◄────────────────────────────┐           │          │
+│  └──────────────────────────────────────────────────┼───────────┘          │
+│                                                      │                      │
+│         ┌────────────────────────────────────────────┘                      │
+│         │                                                                   │
+│         ▼                                                                   │
+│  ┌─────────────────────────────────────────────────────────────┐           │
+│  │            SQLite Database (measurements.db)                │           │
+│  ├─────────────────────────────────────────────────────────────┤           │
+│  │                                                             │           │
+│  │  ┌────────────────┐  ┌────────────────┐  ┌──────────────┐ │           │
+│  │  │    sensors     │  │  measurements  │  │    alerts    │ │           │
+│  │  ├────────────────┤  ├────────────────┤  ├──────────────┤ │           │
+│  │  │ sensor_id (PK) │  │ id (PK)        │  │ id (PK)      │ │           │
+│  │  │ type           │  │ timestamp      │  │ timestamp    │ │           │
+│  │  │ rig_id         │  │ sensor_id (FK) │  │ sensor_id    │ │           │
+│  │  │ modbus_address │  │ type           │  │ rig_id       │ │           │
+│  │  │ register       │  │ value          │  │ level        │ │           │
+│  │  │ unit           │  │ unit           │  │ code         │ │           │
+│  │  │ alarm_lo       │  │ quality        │  │ message      │ │           │
+│  │  │ alarm_hi       │  │ sent_to_cloud  │  │ ack          │ │           │
+│  │  │ enabled        │  └────────────────┘  └──────────────┘ │           │
+│  │  └────────────────┘                                        │           │
+│  │                                                             │           │
+│  │  Índices:                                                   │           │
+│  │    • idx_measurements_timestamp                            │           │
+│  │    • idx_measurements_sensor_id                            │           │
+│  │    • idx_measurements_sent                                 │           │
+│  │    • idx_alerts_ack                                        │           │
+│  │    • idx_alerts_timestamp                                  │           │
+│  │                                                             │           │
+│  └─────────────────┬──────────────┬──────────────┬────────────┘           │
+│                    │              │              │                        │
+│                    ▼              ▼              ▼                        │
+│         ┌──────────────┐  ┌──────────────┐  ┌──────────────┐            │
+│         │    Motor     │  │    Bridge    │  │   Dashboard  │            │
+│         │   Alertas    │  │ ThingsBoard  │  │    Local     │            │
+│         ├──────────────┤  ├──────────────┤  ├──────────────┤            │
+│         │ • Lee BD     │  │ • Lee BD     │  │ • Muestra    │            │
+│         │ • Compara    │  │ • Obtiene    │  │   alertas    │            │
+│         │   umbrales   │  │   unsent=0   │  │ • Históricos │            │
+│         │ • Genera     │  │ • Publica a  │  │ • Gráficos   │            │
+│         │   alertas    │  │   TB (HTTP)  │  │              │            │
+│         │ • Notifica   │  │ • Marca      │  │              │            │
+│         │   (email,    │  │   sent=1     │  │              │            │
+│         │   Telegram)  │  │              │  │              │            │
+│         └──────────────┘  └──────┬───────┘  └──────────────┘            │
+│                                  │                                        │
+└──────────────────────────────────┼────────────────────────────────────────┘
+                                   │
+                                   │ HTTP API / MQTT
+                                   │ (sincronización periódica)
+                                   │
+                                   ▼
+                          ┌───────────────────┐
+                          │   THINGSBOARD     │
+                          │   (Cloud/Local)   │
+                          ├───────────────────┤
+                          │ • Dashboard       │
+                          │ • Alarmas         │
+                          │ • Historización   │
+                          │ • Analytics       │
+                          └───────────────────┘
+
+
+════════════════════════════════════════════════════════════════════════════
+                              FLUJO DE DATOS
+════════════════════════════════════════════════════════════════════════════
+
+1. LECTURA (cada 2 segundos):
+   Arduino ──[Modbus RTU]──> ModbusMaster ──> DataNormalizer ──> SQLite
+
+2. TIEMPO REAL:
+   SQLite ──> WebSocket ──> Frontend (Dashboard Local)
+
+3. ALERTAS LOCALES:
+   Motor Alertas ──> SELECT measurements WHERE ... ──> Compara umbrales
+                 └──> INSERT alerts WHERE value > alarm_hi
+
+4. SINCRONIZACIÓN CLOUD:
+   Bridge TB ──> SELECT measurements WHERE sent_to_cloud=0
+            ├──> POST ThingsBoard HTTP API (telemetría agregada)
+            └──> UPDATE measurements SET sent_to_cloud=1
+
+5. LIMPIEZA (periódica):
+   Cron ──> DELETE measurements WHERE timestamp < NOW() - 30 days
+        └──> VACUUM
+
+
+════════════════════════════════════════════════════════════════════════════
+                          EJEMPLO DE DATOS
+════════════════════════════════════════════════════════════════════════════
+
+sensors:
+┌───────────┬──────┬────────┬────────────────┬──────────┬──────┬──────────┬──────────┐
+│ sensor_id │ type │ rig_id │ modbus_address │ register │ unit │ alarm_lo │ alarm_hi │
+├───────────┼──────┼────────┼────────────────┼──────────┼──────┼──────────┼──────────┤
+│ TILT_01   │ tilt │ RIG_01 │       1        │    0     │ deg  │   -5.0   │   5.0    │
+│ WIND_01   │ wind │ RIG_01 │       2        │   13     │ m_s  │   NULL   │  25.0    │
+│ LOAD_A1   │ load │ RIG_02 │       3        │   12     │ kg   │    0.0   │ 500.0    │
+└───────────┴──────┴────────┴────────────────┴──────────┴──────┴──────────┴──────────┘
+
+measurements:
+┌────┬──────────────────────┬───────────┬──────┬───────┬──────┬─────────┬───────────────┐
+│ id │      timestamp       │ sensor_id │ type │ value │ unit │ quality │ sent_to_cloud │
+├────┼──────────────────────┼───────────┼──────┼───────┼──────┼─────────┼───────────────┤
+│ 1  │ 2025-12-03T18:00:00Z │ TILT_01   │ tilt │  2.35 │ deg  │   OK    │       0       │
+│ 2  │ 2025-12-03T18:00:00Z │ WIND_01   │ wind │ 12.50 │ m_s  │   OK    │       0       │
+│ 3  │ 2025-12-03T18:00:02Z │ TILT_01   │ tilt │  5.80 │ deg  │  ALARM  │       0       │
+│ 4  │ 2025-12-03T18:00:02Z │ WIND_01   │ wind │ 27.30 │ m_s  │  ALARM  │       0       │
+└────┴──────────────────────┴───────────┴──────┴───────┴──────┴─────────┴───────────────┘
+
+alerts:
+┌────┬──────────────────────┬───────────┬────────┬──────────┬─────────────────────┬─────┐
+│ id │      timestamp       │ sensor_id │ rig_id │  level   │        code         │ ack │
+├────┼──────────────────────┼───────────┼────────┼──────────┼─────────────────────┼─────┤
+│ 1  │ 2025-12-03T18:00:02Z │ TILT_01   │ RIG_01 │  ALARM   │ TILT_LIMIT_EXCEEDED │  0  │
+│ 2  │ 2025-12-03T18:00:02Z │ WIND_01   │ RIG_01 │ CRITICAL │   WIND_CRITICAL     │  0  │
+└────┴──────────────────────┴───────────┴────────┴──────────┴─────────────────────┴─────┘
+
+
+════════════════════════════════════════════════════════════════════════════
+                        VENTAJAS DE ESTA ARQUITECTURA
+════════════════════════════════════════════════════════════════════════════
+
+✅ RESILIENCIA:
+   • Edge funciona offline (sin dependencia de cloud)
+   • Datos persistidos localmente (no se pierden)
+   • Sincronización diferida cuando haya conectividad
+
+✅ AUTONOMÍA:
+   • Motor de alertas local (respuesta inmediata)
+   • Dashboard local (visualización sin latencia)
+   • Decisiones críticas en el Edge
+
+✅ EFICIENCIA:
+   • Solo datos agregados al cloud (reduce ancho de banda)
+   • Índices optimizados (consultas rápidas)
+   • Limpieza automática (control de espacio)
+
+✅ TRAZABILIDAD:
+   • Todas las lecturas registradas (auditoría completa)
+   • Histórico de alertas (análisis post-incidente)
+   • Calidad de datos (OK, WARN, ALARM, ERROR)
+
+✅ ESCALABILIDAD:
+   • Múltiples sensores por bus Modbus
+   • Múltiples rigs (estructuras)
+   • Agregación flexible (por sensor, por rig, por tipo)
+
+
+════════════════════════════════════════════════════════════════════════════
+                            CÓDIGO DE EJEMPLO
+════════════════════════════════════════════════════════════════════════════
+
+# 1. INICIALIZAR BD
+from src.database import Database
+db = Database('/opt/edge/db/measurements.db')
+
+# 2. REGISTRAR SENSORES (una vez al setup)
+db.upsert_sensor({
+    'sensor_id': 'TILT_01',
+    'type': 'tilt',
+    'rig_id': 'RIG_01',
+    'modbus_address': 1,
+    'register': 0,
+    'unit': 'deg',
+    'alarm_lo': -5.0,
+    'alarm_hi': 5.0
+})
+
+# 3. GUARDAR TELEMETRÍA (cada ciclo de polling)
+db.insert_measurement({
+    'sensor_id': 'TILT_01',
+    'type': 'tilt',
+    'value': 2.35,
+    'unit': 'deg',
+    'quality': 'OK'
+})
+
+# 4. MOTOR DE ALERTAS (cada ciclo)
+sensors = db.get_all_sensors()
+for sensor in sensors:
+    latest = db.get_measurements(sensor_id=sensor['sensor_id'], limit=1)[0]
+    if latest['value'] > sensor['alarm_hi']:
+        db.insert_alert({
+            'level': 'ALARM',
+            'code': f"{sensor['type'].upper()}_HIGH",
+            'message': f"Valor {latest['value']} > {sensor['alarm_hi']}"
+        })
+
+# 5. BRIDGE THINGSBOARD (periódico: cada 1 minuto)
+unsent = db.get_unsent_measurements(limit=100)
+# Agrupar por sensor y publicar telemetría agregada
+# ...
+db.mark_as_sent([m['id'] for m in unsent])
+
+# 6. CONSULTAS PARA DASHBOARD LOCAL
+latest_tilt = db.get_measurements(sensor_id='TILT_01', limit=10)
+active_alerts = db.get_alerts(ack=False, limit=50)
+stats = db.get_db_stats()
+
+
+════════════════════════════════════════════════════════════════════════════
+                              ARCHIVOS CREADOS
+════════════════════════════════════════════════════════════════════════════
+
+edge/
+├── src/
+│   └── database.py                    # 700 líneas - Módulo principal
+│
+├── examples/
+│   └── database_usage.py              # 333 líneas - Ejemplo completo
+│
+├── tests/
+│   └── test_database.py               # 350 líneas - Tests unitarios
+│
+├── README_DATABASE.md                 # 567 líneas - Documentación completa
+├── RESUMEN_DATABASE.md                # 327 líneas - Resumen ejecutivo
+└── ARQUITECTURA_DATABASE_VISUAL.txt   # Este archivo
+
+TOTAL: ~2277 líneas de código + documentación
+
+
+════════════════════════════════════════════════════════════════════════════
+                              SIGUIENTE PASO
+════════════════════════════════════════════════════════════════════════════
+
+1. Integrar database.py con PollingService
+2. Implementar Motor de Alertas (alert_engine.py)
+3. Desarrollar Bridge ThingsBoard (thingsboard_bridge.py)
+4. Crear endpoints API REST para consultas
+5. Dashboard con gráficos históricos (Chart.js)
+
+
+Versión: 1.0
+Fecha: 3 de diciembre de 2025
+Autor: Edge Layer - TFM Supervisor de Cargas
+```

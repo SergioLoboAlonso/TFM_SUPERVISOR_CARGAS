@@ -1,0 +1,46 @@
+# Base de datos
+*.db
+*.db-journal
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Backups y migraciones
+edge_backup_*/
+*_backup_*/
+
+# Archivos de desarrollo
+.dev-docs/
+.dev-scripts/
+test_*.py
+*_test.py
+demo_*.py
+
+# Infraestructura local (opcional)
+infra/mosquitto/data/
+infra/mosquitto/log/
+infra/fiware/data/

@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard - Supervisor de Cargas</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <!-- Navbar Bootstrap -->
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="/">Supervisor Cargas</a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav me-auto mb-2 mb-lg-0">
+                    <li class="nav-item"><a class="nav-link {{ 'active' if request.path.startswith('/diagnostic') else '' }}" href="/diagnostic">Diagnóstico</a></li>
+                    <li class="nav-item"><a class="nav-link {{ 'active' if request.path == '/' else '' }}" href="/">Dashboard</a></li>
+                    <li class="nav-item"><a class="nav-link {{ 'active' if request.path.startswith('/config') else '' }}" href="/config">Configuración</a></li>
+                    <li class="nav-item"><a class="nav-link {{ 'active' if request.path.startswith('/polling') else '' }}" href="/polling">Polling</a></li>
+                    <li class="nav-item"><a class="nav-link {{ 'active' if request.path.startswith('/history') else '' }}" href="/history">📈 Historial</a></li>
+                </ul>
+                <ul class="navbar-nav">
+                    <li class="nav-item">
+                        <a class="nav-link" href="#" id="alerts-badge-nav">
+                            🚨 Alertas <span class="badge bg-danger" id="alerts-count-badge">0</span>
+                        </a>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container mt-4">
+        <!-- Adaptador USB-RS485 -->
+        <div class="card mb-4">
+            <div class="card-header bg-info text-white">
+                <h5><i class="bi bi-usb"></i> 📡 Adaptador USB-RS485</h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <table class="table table-sm">
+                            <tr>
+                                <th>Puerto:</th>
+                                <td id="adapter-port">-</td>
+                            </tr>
+                            <tr>
+                                <th>Baudrate:</th>
+                                <td id="adapter-baudrate">-</td>
+                            </tr>
+                            <tr>
+                                <th>Estado:</th>
+                                <td id="adapter-status">
+                                    <span class="badge bg-secondary">Cargando...</span>
+                                </td>
+                            </tr>
+                        </table>
+                    </div>
+                    <div class="col-md-6">
+                        <h6>Estadísticas Globales</h6>
+                        <ul class="list-group list-group-flush">
+                            <li class="list-group-item d-flex justify-content-between">
+                                <span>Tramas TX:</span>
+                                <strong id="stats-tx">0</strong>
+                            </li>
+                            <li class="list-group-item d-flex justify-content-between">
+                                <span>Tramas RX:</span>
+                                <strong id="stats-rx">0</strong>
+                            </li>
+                            <li class="list-group-item d-flex justify-content-between">
+                                <span>Errores CRC:</span>
+                                <strong id="stats-crc" class="text-danger">0</strong>
+                            </li>
+                            <li class="list-group-item d-flex justify-content-between">
+                                <span>Timeouts:</span>
+                                <strong id="stats-timeouts" class="text-warning">0</strong>
+                            </li>
+                            <li class="list-group-item d-flex justify-content-between">
+                                <span>Dispositivos activos:</span>
+                                <strong id="stats-devices" class="text-success">0</strong>
+                            </li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Navegación -->
+        <div class="row">
+            <div class="col-md-6 mb-3">
+                <div class="card h-100">
+                    <div class="card-body text-center">
+                        <h3>🔧 Configuración</h3>
+                        <p class="text-muted">
+                            Discovery de dispositivos, gestión de alias, identificación LED, cambio de UnitID
+                        </p>
+                        <a href="/config" class="btn btn-primary btn-lg">
+                            Ir a Configuración
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-md-6 mb-3">
+                <div class="card h-100">
+                    <div class="card-body text-center">
+                        <h3>📊 Polling en Vivo</h3>
+                        <p class="text-muted">
+                            Monitoreo de telemetría en tiempo real: ángulos, temperatura, aceleración, peso
+                        </p>
+                        <a href="/polling" class="btn btn-success btn-lg">
+                            Ir a Polling
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <div class="mt-4 text-center text-muted">
+            <small>TFM Supervisor de Cargas - Sergio Lobo - UNIR 2025</small>
+        </div>
+    </div>
+
+    <!-- Panel de Alertas Flotante -->
+    <div id="alerts-panel" class="alerts-panel">
+        <div class="alerts-header" onclick="toggleAlertsPanel()">
+            <span>
+                <strong>🚨 Alertas</strong>
+                <span class="badge bg-danger ms-2" id="alerts-count">0</span>
+            </span>
+            <span id="alerts-toggle-icon">▲</span>
+        </div>
+        <div id="alerts-content" class="alerts-content">
+            <div class="alerts-stats mb-2">
+                <span class="badge bg-danger me-1" id="stat-alarm">0 ALARM</span>
+                <span class="badge bg-warning text-dark me-1" id="stat-warn">0 WARN</span>
+                <span class="badge bg-info me-1" id="stat-info">0 INFO</span>
+            </div>
+            <div id="alerts-list" class="alerts-list">
+                <div class="text-muted text-center py-3">
+                    <small>Cargando alertas...</small>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <style>
+        .alerts-panel {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: white;
+            border-top: 3px solid #dc3545;
+            box-shadow: 0 -2px 10px rgba(0,0,0,0.2);
+            z-index: 1000;
+            transition: transform 0.3s ease;
+        }
+        
+        .alerts-panel.collapsed {
+            transform: translateY(calc(100% - 45px));
+        }
+        
+        .alerts-header {
+            padding: 12px 20px;
+            background: #f8f9fa;
+            border-bottom: 1px solid #dee2e6;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            user-select: none;
+        }
+        
+        .alerts-header:hover {
+            background: #e9ecef;
+        }
+        
+        .alerts-content {
+            padding: 15px 20px;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        
+        .alerts-stats {
+            display: flex;
+            gap: 5px;
+            flex-wrap: wrap;
+        }
+        
+        .alerts-list {
+            margin-top: 10px;
+        }
+        
+        .alert-item {
+            padding: 10px;
+            margin-bottom: 8px;
+            border-left: 4px solid;
+            background: #f8f9fa;
+            border-radius: 4px;
+            font-size: 0.9rem;
+        }
+        
+        .alert-item.level-ALARM {
+            border-left-color: #dc3545;
+            background: #f8d7da;
+        }
+        
+        .alert-item.level-WARN {
+            border-left-color: #ffc107;
+            background: #fff3cd;
+        }
+        
+        .alert-item.level-INFO {
+            border-left-color: #0dcaf0;
+            background: #cff4fc;
+        }
+        
+        .alert-item.level-CRITICAL {
+            border-left-color: #6f42c1;
+            background: #e0cffc;
+        }
+        
+        .alert-timestamp {
+            font-size: 0.75rem;
+            color: #6c757d;
+        }
+        
+        .alert-message {
+            margin: 5px 0;
+        }
+        
+        .alert-actions {
+            margin-top: 5px;
+        }
+        
+        .btn-ack {
+            font-size: 0.75rem;
+            padding: 2px 8px;
+        }
+    </style>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <script>
+        // Cargar info del adaptador
+        async function loadAdapterInfo() {
+            try {
+                const response = await fetch('/api/adapter');
+                const data = await response.json();
+                
+                document.getElementById('adapter-port').textContent = data.port || '-';
+                document.getElementById('adapter-baudrate').textContent = data.baudrate ? `${data.baudrate} bps` : '-';
+                
+                const statusBadge = document.getElementById('adapter-status');
+                if (data.connected) {
+                    statusBadge.innerHTML = '<span class="badge bg-success">🟢 Conectado</span>';
+                } else {
+                    statusBadge.innerHTML = '<span class="badge bg-danger">🔴 Desconectado</span>';
+                }
+                
+                document.getElementById('stats-tx').textContent = data.tx_frames || 0;
+                document.getElementById('stats-rx').textContent = data.rx_frames || 0;
+                document.getElementById('stats-crc').textContent = data.crc_errors || 0;
+                document.getElementById('stats-timeouts').textContent = data.timeouts || 0;
+            } catch (error) {
+                console.error('Error al cargar info del adaptador:', error);
+                document.getElementById('adapter-status').innerHTML = '<span class="badge bg-danger">Error</span>';
+            }
+        }
+
+        // Cargar cantidad de dispositivos
+        async function loadDevicesCount() {
+            try {
+                const response = await fetch('/api/devices');
+                const devices = await response.json();
+                const activeDevices = devices.filter(d => d.status === 'online').length;
+                document.getElementById('stats-devices').textContent = activeDevices;
+            } catch (error) {
+                console.error('Error al cargar dispositivos:', error);
+            }
+        }
+
+        // Cargar al iniciar
+        window.addEventListener('DOMContentLoaded', () => {
+            loadAdapterInfo();
+            loadDevicesCount();
+            
+            // Refrescar cada 5 segundos
+            setInterval(() => {
+                loadAdapterInfo();
+                loadDevicesCount();
+            }, 5000);
+        });
+    </script>
+    
+    <script>
+        // ============================================================================
+        // SISTEMA DE ALERTAS
+        // ============================================================================
+        
+        let alertsCollapsed = false;
+        let socket = null;
+        
+        // Toggle panel de alertas
+        function toggleAlertsPanel() {
+            alertsCollapsed = !alertsCollapsed;
+            const panel = document.getElementById('alerts-panel');
+            const icon = document.getElementById('alerts-toggle-icon');
+            
+            if (alertsCollapsed) {
+                panel.classList.add('collapsed');
+                icon.textContent = '▼';
+            } else {
+                panel.classList.remove('collapsed');
+                icon.textContent = '▲';
+            }
+        }
+        
+        // Cargar alertas desde API
+        async function loadAlerts() {
+            try {
+                const response = await fetch('/api/alerts?ack=false&limit=20');
+                const data = await response.json();
+                
+                updateAlertsUI(data.alerts);
+                updateAlertsStats();
+            } catch (error) {
+                console.error('Error cargando alertas:', error);
+            }
+        }
+        
+        // Actualizar UI con lista de alertas
+        function updateAlertsUI(alerts) {
+            const list = document.getElementById('alerts-list');
+            const countBadge = document.getElementById('alerts-count');
+            const countBadgeNav = document.getElementById('alerts-count-badge');
+            
+            // Actualizar contador
+            const count = alerts.length;
+            countBadge.textContent = count;
+            countBadgeNav.textContent = count;
+            
+            if (count === 0) {
+                list.innerHTML = '<div class="text-muted text-center py-3"><small>✅ No hay alertas activas</small></div>';
+                return;
+            }
+            
+            // Renderizar alertas
+            list.innerHTML = alerts.map(alert => {
+                const timestamp = new Date(alert.timestamp).toLocaleString('es-ES');
+                const levelBadge = getLevelBadge(alert.level);
+                
+                return `
+                    <div class="alert-item level-${alert.level}">
+                        <div class="d-flex justify-content-between align-items-start">
+                            <div>
+                                ${levelBadge}
+                                <strong>${alert.code}</strong>
+                            </div>
+                            <span class="alert-timestamp">${timestamp}</span>
+                        </div>
+                        <div class="alert-message">
+                            ${alert.message}
+                        </div>
+                        ${alert.sensor_id ? `<small class="text-muted">Sensor: ${alert.sensor_id}</small>` : ''}
+                        <div class="alert-actions">
+                            <button class="btn btn-sm btn-outline-success btn-ack" onclick="acknowledgeAlert(${alert.id})">
+                                ✓ Reconocer
+                            </button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+        
+        // Badge según nivel
+        function getLevelBadge(level) {
+            const badges = {
+                'CRITICAL': '<span class="badge bg-purple">CRÍTICO</span>',
+                'ALARM': '<span class="badge bg-danger">ALARMA</span>',
+                'WARN': '<span class="badge bg-warning text-dark">AVISO</span>',
+                'INFO': '<span class="badge bg-info">INFO</span>'
+            };
+            return badges[level] || '<span class="badge bg-secondary">-</span>';
+        }
+        
+        // Actualizar estadísticas
+        async function updateAlertsStats() {
+            try {
+                const response = await fetch('/api/alerts/stats');
+                const stats = await response.json();
+                
+                document.getElementById('stat-alarm').textContent = 
+                    `${stats.by_level.ALARM + stats.by_level.CRITICAL} ALARM`;
+                document.getElementById('stat-warn').textContent = 
+                    `${stats.by_level.WARN} WARN`;
+                document.getElementById('stat-info').textContent = 
+                    `${stats.by_level.INFO} INFO`;
+            } catch (error) {
+                console.error('Error cargando stats:', error);
+            }
+        }
+        
+        // Reconocer alerta
+        async function acknowledgeAlert(alertId) {
+            try {
+                const response = await fetch(`/api/alerts/${alertId}/acknowledge`, {
+                    method: 'POST'
+                });
+                
+                if (response.ok) {
+                    // Recargar alertas
+                    loadAlerts();
+                    
+                    // Mostrar feedback
+                    showToast('Alerta reconocida', 'success');
+                }
+            } catch (error) {
+                console.error('Error reconociendo alerta:', error);
+                showToast('Error al reconocer alerta', 'danger');
+            }
+        }
+        
+        // Toast de notificación
+        function showToast(message, type = 'info') {
+            // Simple alert por ahora (se puede mejorar con Bootstrap Toast)
+            const alertDiv = document.createElement('div');
+            alertDiv.className = `alert alert-${type} alert-dismissible fade show position-fixed top-0 start-50 translate-middle-x mt-3`;
+            alertDiv.style.zIndex = '9999';
+            alertDiv.innerHTML = `
+                ${message}
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            `;
+            document.body.appendChild(alertDiv);
+            
+            setTimeout(() => {
+                alertDiv.remove();
+            }, 3000);
+        }
+        
+        // Inicializar WebSocket para alertas en tiempo real
+        function initAlertsWebSocket() {
+            socket = io();
+            
+            socket.on('connect', () => {
+                console.log('✅ WebSocket conectado para alertas');
+            });
+            
+            socket.on('new_alert', (alert) => {
+                console.log('🚨 Nueva alerta:', alert);
+                
+                // Recargar alertas
+                loadAlerts();
+                
+                // Notificación visual
+                showToast(`🚨 ${alert.level}: ${alert.code}`, 'warning');
+                
+                // Expandir panel si está colapsado
+                if (alertsCollapsed) {
+                    toggleAlertsPanel();
+                }
+            });
+            
+            socket.on('alert_acknowledged', (data) => {
+                console.log('✅ Alerta reconocida:', data.alert_id);
+                loadAlerts();
+            });
+        }
+        
+        // Inicializar al cargar
+        window.addEventListener('DOMContentLoaded', () => {
+            loadAlerts();
+            initAlertsWebSocket();
+            
+            // Refrescar alertas cada 30 segundos
+            setInterval(loadAlerts, 30000);
+        });
+    </script>
+</body>
+</html>

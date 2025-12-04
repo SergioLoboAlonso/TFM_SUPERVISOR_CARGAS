@@ -1,0 +1,48 @@
+# Archivos de desarrollo y testing
+.dev-docs/
+.dev-scripts/
+test_*.py
+*_test.py
+demo_*.py
+verify_*.py
+diagnostico_*.py
+
+# Base de datos SQLite y logs
+*.db
+*.db-journal
+*.log
+
+# Entorno local
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Entorno virtual
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Backups
+edge_backup_*/
+
+# Archivos de ejemplo
+examples/

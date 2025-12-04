@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Diagnóstico - TFM Supervisor de Cargas</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css">
+    <style>
+        /* Prevenir overflow horizontal */
+        body {
+            overflow-x: hidden;
+        }
+        .status-badge {
+            font-size: 0.9rem;
+            padding: 0.4rem 0.8rem;
+        }
+        .device-card {
+            border-left: 4px solid #0d6efd;
+            /* transition removed to prevent layout reflows */
+        }
+        .device-card.offline {
+            border-left-color: #dc3545;
+            opacity: 0.7;
+        }
+        .stat-box {
+            background: #f8f9fa;
+            padding: 1rem;
+            border-radius: 0.5rem;
+            margin-bottom: 0.5rem;
+        }
+        .stat-label {
+            font-size: 0.85rem;
+            color: #6c757d;
+            margin-bottom: 0.25rem;
+        }
+        .stat-value {
+            font-size: 1.5rem;
+            font-weight: bold;
+        }
+        .error-indicator {
+            color: #dc3545;
+            font-weight: bold;
+        }
+        .ok-indicator {
+            color: #198754;
+            font-weight: bold;
+        }
+        .realtime-badge {
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        .update-flash {
+            animation: flash 0.5s;
+        }
+        @keyframes flash {
+            0%, 100% { background-color: transparent; }
+            50% { background-color: rgba(13, 110, 253, 0.1); }
+        }
+    </style>
+</head>
+<body>
+    <!-- Navbar Bootstrap -->
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="/">Supervisor Cargas</a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav me-auto mb-2 mb-lg-0">
+                    <li class="nav-item"><a class="nav-link {{ 'active' if request.path.startswith('/diagnostic') else '' }}" href="/diagnostic">Diagnóstico</a></li>
+                    <li class="nav-item"><a class="nav-link {{ 'active' if request.path == '/' else '' }}" href="/">Dashboard</a></li>
+                    <li class="nav-item"><a class="nav-link {{ 'active' if request.path.startswith('/config') else '' }}" href="/config">Configuración</a></li>
+                    <li class="nav-item"><a class="nav-link {{ 'active' if request.path.startswith('/polling') else '' }}" href="/polling">Polling</a></li>
+                    <li class="nav-item"><a class="nav-link {{ 'active' if request.path.startswith('/history') else '' }}" href="/history">📈 Historial</a></li>
+                </ul>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container-fluid mt-4">
+        <div class="row mb-4">
+            <div class="col">
+                <h2><i class="bi bi-clipboard-pulse"></i> Diagnóstico de Dispositivos</h2>
+                <p class="text-muted">
+                    Estado, errores y estadísticas Modbus de todos los dispositivos
+                    <span class="badge bg-success realtime-badge ms-2">
+                        <i class="bi bi-broadcast"></i> En vivo
+                    </span>
+                </p>
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-primary" id="refreshBtn">
+                    <i class="bi bi-arrow-clockwise"></i> Actualizar
+                </button>
+            </div>
+        </div>
+
+        <div id="diagnosticContainer" class="row">
+            <!-- Device cards se generan dinámicamente -->
+        </div>
+
+        <div id="noDevices" class="alert alert-info" style="display: none;">
+            <i class="bi bi-info-circle"></i> No hay dispositivos disponibles. Realiza un escaneo en el Dashboard primero.
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <script>
+        let devices = [];
+        let socket = null;
+        let diagnosticCache = {};
+        let socketInitialized = false;
+
+        function initWebSocket() {
+            // Prevenir inicialización múltiple
+            if (socketInitialized && socket && socket.connected) {
+                console.log('ℹ️ WebSocket ya inicializado');
+                return;
+            }
+            
+            // Desconectar socket anterior si existe
+            if (socket) {
+                console.log('🔌 Desconectando socket anterior...');
+                socket.off('diagnostic_update');
+                socket.disconnect();
+            }
+            
+            socket = io.connect(window.location.origin);
+            socketInitialized = true;
+            
+            socket.on('connect', () => {
+                console.log('✅ WebSocket conectado');
+            });
+            
+            socket.on('disconnect', () => {
+                console.log('❌ WebSocket desconectado');
+                socketInitialized = false;
+            });
+            
+            // Escuchar actualizaciones de diagnóstico en tiempo real
+            socket.on('diagnostic_update', (data) => {
+                console.log('🔍 Diagnostic update recibido:', data);
+                diagnosticCache[data.unit_id] = data;
+                updateDiagnosticCard(data);
+            });
+        }
+
+        async function fetchDevices() {
+            try {
+                const response = await fetch('/api/devices');
+                if (!response.ok) throw new Error('Failed to fetch devices');
+                const data = await response.json();
+                // API devuelve un array (estándar en resto de páginas). Acepta también {devices: [...]} por compatibilidad.
+                devices = Array.isArray(data) ? data : (data.devices || []);
+
+                // Fallback: si no hay dispositivos en caché pero el polling está activo,
+                // usa los unit_ids monitoreados para mostrar diagnóstico igualmente.
+                if ((!devices || devices.length === 0)) {
+                    try {
+                        const pollResp = await fetch('/api/polling/status');
+                        if (pollResp.ok) {
+                            const poll = await pollResp.json();
+                            if (poll.active && Array.isArray(poll.unit_ids) && poll.unit_ids.length > 0) {
+                                devices = poll.unit_ids.map(id => ({ unit_id: id, alias: '' }));
+                            }
+                        }
+                    } catch (e) {
+                        console.warn('No se pudo obtener estado de polling:', e);
+                    }
+                }
+                renderDiagnostics();
+            } catch (error) {
+                console.error('Error fetching devices:', error);
+                showNoDevices();
+            }
+        }
+
+        async function fetchDiagnostic(unitId) {
+            try {
+                const response = await fetch(`/api/diagnostics/${unitId}`);
+                if (!response.ok) {
+                    if (response.status === 503) return null; // Device offline
+                    throw new Error('Failed to fetch diagnostic');
+                }
+                return await response.json();
+            } catch (error) {
+                console.error(`Error fetching diagnostic for unit ${unitId}:`, error);
+                return null;
+            }
+        }
+
+        async function renderDiagnostics() {
+            const container = document.getElementById('diagnosticContainer');
+            const noDevices = document.getElementById('noDevices');
+
+            if (devices.length === 0) {
+                showNoDevices();
+                return;
+            }
+
+            noDevices.style.display = 'none';
+            
+            // Limpiar contenedor completamente
+            while (container.firstChild) {
+                container.removeChild(container.firstChild);
+            }
+            
+            // Crear fragment para inserción eficiente
+            const fragment = document.createDocumentFragment();
+            
+            for (const device of devices) {
+                // Usar caché si existe, sino fetch
+                let diag = diagnosticCache[device.unit_id];
+                if (!diag) {
+                    diag = await fetchDiagnostic(device.unit_id);
+                    if (diag) {
+                        diagnosticCache[device.unit_id] = diag;
+                    }
+                }
+                const cardHTML = createDiagnosticCard(device, diag);
+                
+                // Crear elemento temporal para parsear HTML
+                const tempDiv = document.createElement('div');
+                tempDiv.innerHTML = cardHTML;
+                
+                // Mover el primer hijo (la card) al fragment
+                if (tempDiv.firstElementChild) {
+                    fragment.appendChild(tempDiv.firstElementChild);
+                }
+            }
+            
+            // Insertar todo de una vez
+            container.appendChild(fragment);
+        }
+
+        function updateDiagnosticCard(diag) {
+            // Actualizar solo el contenido interno de la card existente
+            const cardId = `diag-card-${diag.unit_id}`;
+            const existingCard = document.getElementById(cardId);
+            if (!existingCard) {
+                // Si no existe, añadir el dispositivo a la lista y renderizar
+                if (!devices.find(d => d.unit_id === diag.unit_id)) {
+                    devices.push({ unit_id: diag.unit_id, alias: diag.alias || '' });
+                }
+                diagnosticCache[diag.unit_id] = diag;
+                renderDiagnostics();
+                return;
+            }
+
+            // Añadir efecto visual de actualización
+            existingCard.classList.add('update-flash');
+            setTimeout(() => existingCard.classList.remove('update-flash'), 500);
+
+            // Actualizar solo los campos dinámicos
+            // Header
+            const header = existingCard.querySelector('.card-header');
+            if (header) {
+                const statusColor = diag.status.ok ? 'success' : 'danger';
+                const statusText = diag.status.ok ? 'OK' : 'ERROR';
+                header.className = `card-header bg-${statusColor} text-white`;
+                header.innerHTML = `<h5 class="mb-0">
+                    <i class="bi bi-hdd-network"></i> Unit ${diag.unit_id}
+                    <span class="badge bg-light text-${statusColor} float-end">${statusText}</span>
+                </h5>`;
+            }
+            // Alias
+            const aliasEl = existingCard.querySelector('h6.text-muted');
+            if (aliasEl) aliasEl.textContent = diag.alias || 'Sin alias';
+            // HW/FW/Uptime
+            const infoSmall = existingCard.querySelectorAll('.card-body small.text-muted');
+            if (infoSmall.length >= 2) {
+                infoSmall[0].textContent = `HW: ${diag.hw_version} | FW: ${diag.fw_version}`;
+                infoSmall[1].textContent = `Uptime: ${formatUptime(diag.uptime_seconds)}`;
+            }
+            // Estado
+            const estadoBox = existingCard.querySelector('.stat-label + div span');
+            if (estadoBox) {
+                estadoBox.className = diag.status.ok ? 'ok-indicator' : 'error-indicator';
+                estadoBox.innerHTML = `<i class="bi bi-${diag.status.ok ? 'check-circle-fill' : 'x-circle-fill'}"></i> Sistema ${diag.status.ok ? 'OK' : 'con errores'}`;
+            }
+            // Modbus stats
+            const statValues = existingCard.querySelectorAll('.stat-value');
+            if (statValues.length >= 4) {
+                statValues[0].textContent = diag.modbus_stats.rx_ok;
+                statValues[1].textContent = diag.modbus_stats.tx_ok;
+                statValues[2].textContent = diag.modbus_stats.crc_errors;
+                statValues[2].className = diag.modbus_stats.crc_errors > 0 ? 'stat-value text-danger' : 'stat-value text-muted';
+                statValues[3].textContent = diag.modbus_stats.exceptions;
+                statValues[3].className = diag.modbus_stats.exceptions > 0 ? 'stat-value text-warning' : 'stat-value text-muted';
+            }
+            // UART overruns
+            const uartAlert = existingCard.querySelector('.alert-warning');
+            if (uartAlert) {
+                if (diag.modbus_stats.uart_overruns > 0) {
+                    uartAlert.innerHTML = `<i class="bi bi-exclamation-triangle"></i> UART overruns: ${diag.modbus_stats.uart_overruns}`;
+                    uartAlert.style.display = '';
+                } else {
+                    uartAlert.style.display = 'none';
+                }
+            }
+            // Quality flags
+            const qfBadge = existingCard.querySelector('.stat-label + div .badge');
+            if (qfBadge) {
+                if (diag.quality_flags === 0) {
+                    qfBadge.className = 'badge bg-success';
+                    qfBadge.textContent = 'Todos los datos OK';
+                } else {
+                    qfBadge.className = 'badge bg-warning';
+                    qfBadge.textContent = `Flags: 0x${diag.quality_flags.toString(16).toUpperCase()}`;
+                }
+            }
+            // Errores activos
+            const errorAlert = existingCard.querySelector('.alert-danger');
+            if (errorAlert) {
+                if (diag.errors.bitmask !== 0) {
+                    errorAlert.innerHTML = `<i class="bi bi-exclamation-octagon"></i> Errores activos: 0x${diag.errors.bitmask.toString(16).toUpperCase()}`;
+                    errorAlert.style.display = '';
+                } else {
+                    errorAlert.style.display = 'none';
+                }
+            }
+            // Footer timestamp
+            const footer = existingCard.querySelector('.card-footer small');
+            if (footer) footer.textContent = `Actualizado: ${new Date(diag.timestamp).toLocaleString('es-ES')}`;
+        }
+
+        function createDiagnosticCard(device, diag) {
+            const isOffline = !diag;
+            const offlineClass = isOffline ? 'offline' : '';
+            
+            if (isOffline) {
+                return `
+                    <div class="col-md-6 col-lg-4 mb-4">
+                        <div class="card device-card ${offlineClass}">
+                            <div class="card-header bg-danger text-white">
+                                <h5 class="mb-0">
+                                    <i class="bi bi-hdd-network"></i> Unit ${device.unit_id}
+                                    <span class="badge bg-light text-danger float-end">OFFLINE</span>
+                                </h5>
+                            </div>
+                            <div class="card-body">
+                                <p class="text-muted">El dispositivo no responde.</p>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+
+            const { status, capabilities, modbus_stats, quality_flags } = diag;
+            const statusColor = status.ok ? 'success' : 'danger';
+            const statusText = status.ok ? 'OK' : 'ERROR';
+            const uptimeHuman = formatUptime(diag.uptime_seconds);
+
+            return `
+                <div class="col-md-6 col-lg-4 mb-4">
+                    <div class="card device-card" id="diag-card-${diag.unit_id}">
+                        <div class="card-header bg-${statusColor} text-white">
+                            <h5 class="mb-0">
+                                <i class="bi bi-hdd-network"></i> Unit ${device.unit_id}
+                                <span class="badge bg-light text-${statusColor} float-end">${statusText}</span>
+                            </h5>
+                        </div>
+                        <div class="card-body">
+                            <h6 class="text-muted mb-3">${device.alias || 'Sin alias'}</h6>
+
+                            <!-- Info básica -->
+                            <div class="mb-3">
+                                <small class="text-muted">HW: ${diag.hw_version} | FW: ${diag.fw_version}</small><br>
+                                <small class="text-muted">Uptime: ${uptimeHuman}</small>
+                            </div>
+
+                            <!-- Estado -->
+                            <div class="mb-3">
+                                <div class="stat-label">Estado</div>
+                                <div>
+                                    <span class="${status.ok ? 'ok-indicator' : 'error-indicator'}">
+                                        <i class="bi bi-${status.ok ? 'check-circle-fill' : 'x-circle-fill'}"></i>
+                                        Sistema ${status.ok ? 'OK' : 'con errores'}
+                                    </span><br>
+                                    <small class="text-muted">
+                                        MPU6050: ${status.mpu_ready ? '✓' : '✗'} 
+                                        | Config: ${status.cfg_dirty ? 'No guardado' : 'OK'}
+                                    </small>
+                                </div>
+                            </div>
+
+                            <!-- Capacidades -->
+                            <div class="mb-3">
+                                <div class="stat-label">Capacidades</div>
+                                <div>
+                                    ${capabilities.rs485 ? '<span class="badge bg-primary">RS485</span>' : ''}
+                                    ${capabilities.mpu6050 ? '<span class="badge bg-info">MPU6050</span>' : ''}
+                                    ${capabilities.identify ? '<span class="badge bg-secondary">IDENTIFY</span>' : ''}
+                                    ${capabilities.wind ? '<span class="badge bg-success">WIND</span>' : ''}
+                                    ${capabilities.load ? '<span class="badge bg-warning">LOAD</span>' : ''}
+                                </div>
+                            </div>
+
+                            <!-- Estadísticas Modbus -->
+                            <div class="mb-3">
+                                <div class="stat-label">Estadísticas Modbus</div>
+                                <div class="row g-2">
+                                    <div class="col-6">
+                                        <div class="stat-box">
+                                            <div class="stat-label">RX OK</div>
+                                            <div class="stat-value text-success">${modbus_stats.rx_ok}</div>
+                                        </div>
+                                    </div>
+                                    <div class="col-6">
+                                        <div class="stat-box">
+                                            <div class="stat-label">TX OK</div>
+                                            <div class="stat-value text-success">${modbus_stats.tx_ok}</div>
+                                        </div>
+                                    </div>
+                                    <div class="col-6">
+                                        <div class="stat-box">
+                                            <div class="stat-label">CRC Errors</div>
+                                            <div class="stat-value ${modbus_stats.crc_errors > 0 ? 'text-danger' : 'text-muted'}">
+                                                ${modbus_stats.crc_errors}
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="col-6">
+                                        <div class="stat-box">
+                                            <div class="stat-label">Exceptions</div>
+                                            <div class="stat-value ${modbus_stats.exceptions > 0 ? 'text-warning' : 'text-muted'}">
+                                                ${modbus_stats.exceptions}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                ${modbus_stats.uart_overruns > 0 ? `
+                                    <div class="alert alert-warning mt-2 mb-0" role="alert">
+                                        <i class="bi bi-exclamation-triangle"></i> 
+                                        UART overruns: ${modbus_stats.uart_overruns}
+                                    </div>
+                                ` : ''}
+                            </div>
+
+                            <!-- Quality flags -->
+                            ${quality_flags !== null ? `
+                                <div class="mb-0">
+                                    <div class="stat-label">Quality Flags</div>
+                                    <div>
+                                        <span class="badge ${quality_flags === 0 ? 'bg-success' : 'bg-warning'}">
+                                            ${quality_flags === 0 ? 'Todos los datos OK' : `Flags: 0x${quality_flags.toString(16).toUpperCase()}`}
+                                        </span>
+                                    </div>
+                                </div>
+                            ` : ''}
+
+                            <!-- Errores activos -->
+                            ${diag.errors.bitmask !== 0 ? `
+                                <div class="alert alert-danger mt-3 mb-0" role="alert">
+                                    <i class="bi bi-exclamation-octagon"></i> 
+                                    Errores activos: 0x${diag.errors.bitmask.toString(16).toUpperCase()}
+                                </div>
+                            ` : ''}
+                        </div>
+                        <div class="card-footer text-muted">
+                            <small>Actualizado: ${new Date(diag.timestamp).toLocaleString('es-ES')}</small>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function formatUptime(seconds) {
+            const days = Math.floor(seconds / 86400);
+            const hours = Math.floor((seconds % 86400) / 3600);
+            const minutes = Math.floor((seconds % 3600) / 60);
+            const secs = seconds % 60;
+
+            const parts = [];
+            if (days > 0) parts.push(`${days}d`);
+            if (hours > 0) parts.push(`${hours}h`);
+            if (minutes > 0) parts.push(`${minutes}m`);
+            if (secs > 0 || parts.length === 0) parts.push(`${secs}s`);
+
+            return parts.join(' ');
+        }
+
+        function showNoDevices() {
+            document.getElementById('diagnosticContainer').innerHTML = '';
+            document.getElementById('noDevices').style.display = 'block';
+        }
+
+        document.getElementById('refreshBtn').addEventListener('click', () => {
+            diagnosticCache = {}; // Limpiar caché
+            fetchDevices();
+        });
+
+        // Limpiar al cerrar/salir de la página
+        window.addEventListener('beforeunload', () => {
+            if (socket) {
+                socket.off('diagnostic_update');
+                socket.disconnect();
+            }
+        });
+
+        // Inicializar WebSocket y cargar datos
+        initWebSocket();
+        fetchDevices();
+        
+        // Fijar min-width del contenedor para evitar que se "estreche" progresivamente por reflows
+        (function pinContainerWidth() {
+            const container = document.getElementById('diagnosticContainer');
+            if (!container) return;
+            let initialWidth = container.clientWidth;
+            container.style.minWidth = initialWidth + 'px';
+            window.addEventListener('resize', () => {
+                container.style.minWidth = 'auto';
+                initialWidth = container.clientWidth;
+                container.style.minWidth = initialWidth + 'px';
+            });
+        })();
+        // Fallback: actualización periódica si no llegan eventos
+        setInterval(async () => {
+            // Si no hay dispositivos todavía, intenta obtenerlos
+            if (!devices || devices.length === 0) {
+                await fetchDevices();
+                return;
+            }
+            // Refrescar diagnósticos de cada dispositivo y actualizar cards
+            for (const d of devices) {
+                const diag = await fetchDiagnostic(d.unit_id);
+                diagnosticCache[d.unit_id] = diag;
+                if (diag) updateDiagnosticCard(diag);
+            }
+        }, 5000);
+        
+        // Debug: Monitor de cambios de ancho del contenedor
+        if (window.location.search.includes('debug')) {
+            const container = document.getElementById('diagnosticContainer');
+            let lastWidth = container.offsetWidth;
+            setInterval(() => {
+                const currentWidth = container.offsetWidth;
+                if (currentWidth !== lastWidth) {
+                    console.warn(`⚠️ ANCHO CAMBIÓ: ${lastWidth}px → ${currentWidth}px`);
+                    console.trace('Stack trace del cambio');
+                    lastWidth = currentWidth;
+                }
+            }, 1000);
+            console.log('🐛 Debug mode activado - monitoreando cambios de ancho');
+        }
+    </script>
+</body>
+</html>

@@ -44,3 +44,19 @@ demo_*.py
 infra/mosquitto/data/
 infra/mosquitto/log/
 infra/fiware/data/
+
+# Documentación de desarrollo
+docs/
+edge_command_line/
+tests/
+CAMBIOS_*.md
+*.bak
+
+# Archivos de desarrollo edge
+edge/.dev-docs/
+edge/.dev-scripts/
+edge/THINGSBOARD_*.md
+edge/ALERTS_*.md
+edge/QUICKSTART*.md
+edge/LAUNCHER_README.md
+edge/Private_Docs/

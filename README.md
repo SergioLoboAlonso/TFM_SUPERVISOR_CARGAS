@@ -1,9 +1,37 @@
-# TFM_SUPERVISOR_CARGAS
-ESTE PROYECTO UTILIZA COMUNICACIÓN RS485 MODBUS DESDE UN ARDUINO HACIA UNA PLATAFORMA EDGE BASADA EN RASPBERRY PI QUE PROCESA LOS DATOS Y LOS TRANSMITE POR MQTT A UNA PLATAFORMA CLOUD.
+# Sistema de Supervisión y Monitoreo de Cargas
 
-Estructura general
-- `firmware/` → Código Arduino (sensor remoto y módulo base).
-- `edge/` → Nodo Edge (Raspberry Pi): lectura RS-485, MQTT y envío a FIWARE.
-- `infra/` → Infraestructura local (Docker, MQTT, Orion, etc.).
-- `docs/` → Documentación técnica y memoria del TFM.
-- `tests/` → Plan de pruebas y resultados.
+Sistema distribuido de adquisición de datos basado en Modbus RTU sobre RS-485. Nodos sensores (AVR) transmiten telemetría a capa Edge (Raspberry Pi) que publica datos mediante MQTT.
+
+## Estructura
+
+```
+├── firmware/          # Firmware nodos sensores
+├── edge/              # Aplicación Edge Layer
+└── infra/             # Infraestructura opcional
+```
+
+## Requisitos
+
+**Firmware:** PlatformIO, Arduino UNO/NANO, RS-485
+
+**Edge:** Python 3.8+, USB-RS485, `pip install -r edge/requirements.txt`
+
+## Ejecución
+
+**Firmware:**
+```bash
+cd firmware && pio run -e uno -t upload
+```
+
+**Edge:**
+```bash
+cd edge && python src/app.py
+```
+
+Web UI: `http://localhost:5000`
+
+## Configuración
+
+- `firmware/platformio.ini` - Sensores y pines
+- `edge/src/config.py` - Puerto serie, baudrate, MQTT
+- `edge/.env` - Credenciales cloud (opcional)

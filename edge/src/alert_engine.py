@@ -157,11 +157,17 @@ class AlertEngine:
             self._auto_acknowledge_all_alerts(sensor_id, "THRESHOLD_EXCEEDED_HI",
                 f"Valor normalizado: {value:.2f} {unit}")
             
-            # Limpiar cache
+            # Limpiar cache de alertas activas
             if cache_key_lo in self._active_alerts_cache:
                 del self._active_alerts_cache[cache_key_lo]
             if cache_key_hi in self._active_alerts_cache:
                 del self._active_alerts_cache[cache_key_hi]
+            
+            # Limpiar cache de debouncing para permitir nueva alerta si vuelve a superar umbral
+            if cache_key_lo in self._last_alert_cache:
+                del self._last_alert_cache[cache_key_lo]
+            if cache_key_hi in self._last_alert_cache:
+                del self._last_alert_cache[cache_key_hi]
             
             return None  # No generar alerta si está en rango normal
         
@@ -285,9 +291,13 @@ class AlertEngine:
                 self._auto_acknowledge_all_alerts(device_key, "DEVICE_OFFLINE",
                     f"Dispositivo {alias} (Unit {unit_id}) vuelve online")
                 
-                # Limpiar cache
+                # Limpiar cache de alertas activas
                 if cache_key in self._active_alerts_cache:
                     del self._active_alerts_cache[cache_key]
+                
+                # Limpiar cache de debouncing para permitir nueva alerta si vuelve offline
+                if cache_key in self._last_alert_cache:
+                    del self._last_alert_cache[cache_key]
                 continue  # Dispositivo online, no generar alerta
             
             # Si excede timeout, generar alerta

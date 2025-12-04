@@ -376,7 +376,7 @@ def _register_sensors_to_database(devices):
                     'register': 0x000C,  # IR_MED_PESO_KG
                     'unit': 'kg',
                     'alarm_lo': -5.0,   # Carga negativa anómala
-                    'alarm_hi': 500.0,  # Sobrecarga
+                    'alarm_hi': 1.5,    # Sobrecarga (1.5kg)
                     'enabled': 1
                 })
                 

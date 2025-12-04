@@ -28,7 +28,7 @@ cd firmware && pio run -e uno -t upload
 cd edge && python src/app.py
 ```
 
-Web UI: `http://localhost:5000`
+Web UI: `http://localhost:8080`
 
 ## Configuración
 
